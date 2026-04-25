@@ -4,4 +4,4 @@ platform: salesforce
 base_url: https://development.wiltshire.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false

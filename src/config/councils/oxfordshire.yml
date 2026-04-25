@@ -1,7 +1,7 @@
 name: Oxfordshire
 authority_code: oxfordshire
 platform: planning_explorer
-base_url: https://myeplanning.oxfordshire.gov.uk
+base_url: https://myeplanning.oxfordshire.gov.uk/Northgate/PlanningExplorer
 schedule: 0 3 * * *
 requires_js: false
 enabled: true

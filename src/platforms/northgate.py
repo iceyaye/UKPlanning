@@ -32,12 +32,17 @@ class NorthgateScraper(BaseScraper):
         resp = await self._client.get(self.config.base_url + self.SEARCH_PATH)
         html = resp.text
 
-        if "Disclaimer" in str(resp.url):
+        if "Disclaimer" in str(resp.url) or "Disclaimer" in html:
             soup = BeautifulSoup(html, "lxml")
             form = soup.find("form", action=lambda a: a and "Disclaimer" in a)
             if form:
                 accept_url = urljoin(str(resp.url), form["action"])
-                await self._client.post(accept_url, data={})
+                hidden_fields = {}
+                for inp in form.find_all("input", {"type": "hidden"}):
+                    name = inp.get("name", "")
+                    if name:
+                        hidden_fields[name] = inp.get("value", "")
+                await self._client.post(accept_url, data=hidden_fields)
 
         self._disclaimer_accepted = True
 
@@ -53,8 +58,18 @@ class NorthgateScraper(BaseScraper):
         if form:
             for inp in form.find_all("input"):
                 name = inp.get("name", "")
-                if name and inp.get("type") != "checkbox":
-                    form_data[name] = inp.get("value", "")
+                if not name:
+                    continue
+                input_type = inp.get("type", "").lower()
+                if input_type == "checkbox":
+                    continue
+                if input_type == "radio":
+                    if inp.get("checked") is not None:
+                        form_data[name] = inp.get("value", "")
+                    continue
+                form_data[name] = inp.get("value", "")
+            if "SearchPlanning" in form_data and form_data["SearchPlanning"].lower() == "false":
+                form_data["SearchPlanning"] = "True"
 
         form_data["DateReceivedFrom"] = date_from.strftime(self.DATE_FORMAT)
         form_data["DateReceivedTo"] = date_to.strftime(self.DATE_FORMAT)
@@ -78,7 +93,7 @@ class NorthgateScraper(BaseScraper):
 
     def _parse_results(self, soup: BeautifulSoup) -> list[ApplicationSummary]:
         results = []
-        for link in soup.select('a[href*="/Planning/Display/"]'):
+        for link in soup.select('a[href*="/Planning/Display"]'):
             ref = link.get_text(strip=True)
             href = link.get("href", "")
             if ref and href:

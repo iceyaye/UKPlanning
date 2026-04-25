@@ -4,4 +4,4 @@ platform: planning_explorer
 base_url: https://planning.cumbria.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false

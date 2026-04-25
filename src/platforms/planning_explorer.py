@@ -10,7 +10,7 @@ from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 PE_SEARCH_SELECTORS = {
     "result_links": "table.display_table td a",
     "result_uids": "table.display_table td a",
-    "next_page": "a:has(img[title='Go to next page'])",
+    "next_page": "a:has(img[title*='next page'])",
     "dates_link": "a:-soup-contains('Application Dates')",
 }
 
@@ -57,13 +57,19 @@ class PlanningExplorerScraper(BaseScraper):
         """Handle disclaimer pages that some PE sites show before search."""
         from bs4 import BeautifulSoup
         html = response.text
+        if "Disclaimer" not in html and "disclaimer" not in str(response.url).lower():
+            return response
         soup = BeautifulSoup(html, "lxml")
         accept_form = soup.find("form", action=lambda a: a and "Disclaimer" in a)
         if accept_form:
             action = accept_form.get("action", "")
             accept_url = urljoin(str(response.url), action)
-            await self._client.post(accept_url, data={})
-            # Re-request the original search page now that disclaimer cookie is set
+            hidden_fields = {}
+            for inp in accept_form.find_all("input", {"type": "hidden"}):
+                name = inp.get("name", "")
+                if name:
+                    hidden_fields[name] = inp.get("value", "")
+            await self._client.post(accept_url, data=hidden_fields)
             if search_url:
                 response = await self._client.get(search_url)
         return response
@@ -78,8 +84,14 @@ class PlanningExplorerScraper(BaseScraper):
         form_data[self.DATE_TO_FIELD] = date_to.strftime(self.DATE_FORMAT)
         form_data["cboSelectDateValue"] = "DATE_RECEIVED"
         form_data["csbtnSearch"] = "Search"
-        response = await self._client.post(search_url, data=form_data)
+        form_data["rbGroup"] = "rbRange"
+        origin = "/".join(search_url.split("/")[:3])
+        response = await self._client.post(
+            search_url, data=form_data,
+            headers={"Origin": origin, "Referer": search_url},
+        )
         html = response.text
+        results_base = str(response.url)
         applications = []
         while True:
             page_apps = self._parse_results(html)
@@ -87,8 +99,10 @@ class PlanningExplorerScraper(BaseScraper):
             next_el = self._parser.select_one(html, self._search_selectors["next_page"])
             if next_el is None:
                 break
-            next_url = urljoin(self.config.base_url, next_el.get("href", ""))
-            html = await self._client.get_html(next_url)
+            next_url = urljoin(results_base, next_el.get("href", ""))
+            response = await self._client.get(next_url)
+            html = response.text
+            results_base = str(response.url)
         return applications
 
     def _parse_results(self, html):
@@ -136,6 +150,37 @@ class PlanningExplorerScraper(BaseScraper):
             el = soup.find("input", {"name": name})
             if el:
                 fields[name] = el.get("value", "")
+        return fields
+
+    @staticmethod
+    def _extract_all_fields(html):
+        """Extract all form fields including hidden inputs, selects, and radio defaults."""
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        form = soup.find("form")
+        if not form:
+            form = soup
+        fields = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name", "")
+            if not name:
+                continue
+            input_type = inp.get("type", "").lower()
+            if input_type == "radio":
+                if inp.get("checked") is not None:
+                    fields[name] = inp.get("value", "")
+                elif name not in fields:
+                    fields[name] = ""
+                continue
+            if input_type == "checkbox":
+                continue
+            fields[name] = inp.get("value", "")
+        for sel in form.find_all("select"):
+            name = sel.get("name", "")
+            if not name:
+                continue
+            selected = sel.find("option", selected=True)
+            fields[name] = selected.get("value", "") if selected else ""
         return fields
 
     def _extract_li_fields(self, html, selectors):

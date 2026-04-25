@@ -4,4 +4,4 @@ platform: idox
 base_url: https://planning.scarborough.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false

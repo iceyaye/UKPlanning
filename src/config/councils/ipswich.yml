@@ -4,4 +4,4 @@ platform: swiftlg
 base_url: https://ppc.ipswich.gov.uk/swiftlg/apas/run
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false

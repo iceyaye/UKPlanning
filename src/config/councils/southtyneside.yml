@@ -1,7 +1,7 @@
 name: SouthTyneside
 authority_code: southtyneside
 platform: planning_explorer
-base_url: https://planning.southtyneside.info
+base_url: https://planning.southtyneside.info/Northgate/PlanningExplorer
 schedule: 0 3 * * *
 requires_js: false
 enabled: true

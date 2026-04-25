@@ -18,28 +18,29 @@ import httpx
 from src.core.config import CouncilConfig
 from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 
-# Map authority_code -> (base_url, path_prefix, register_name)
+# Map authority_code -> (base_url, path_prefix, register_name, ref_prefix)
+# ref_prefix is optional — used for councils with non-standard reference formats
 COUNCIL_CONFIG = {
-    "allerdale": ("https://cumberlandcouncil.my.site.com", "/pr3", "Arcus_BE_Public_Register"),
-    "copeland": ("https://cumberlandcouncil.my.site.com", "/pr3", "Arcus_BE_Public_Register"),
-    "anglesey": ("https://ioacc.my.site.com", "", "Arcus_BE_Public_Register"),
-    "bromley": ("https://planningaccess.bromley.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "carmarthenshire": ("https://carmarthenshire.my.site.com", "/en", "Arcus_BE_Public_Register"),
-    "eppingforest": ("https://eppingforestdc.my.site.com", "/pr", "Arcus_BE_Public_Register"),
-    "haringey": ("https://publicregister.haringey.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "shepway": ("https://folkestonehythedc.my.site.com", "/PR3", "Arcus_BE_Public_Register"),
-    "southderbyshire": ("https://southderbyshire.my.site.com", "", "Arcus_BE_Public_Register"),
-    "wrexham": ("https://register.wrexham.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "eastleigh": ("https://planning.eastleigh.gov.uk", "/s", "Arcus_BE_Public_Register"),
-    "wiltshire": ("https://development.wiltshire.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "miltonkeynes": ("https://www.be.milton-keynes.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "salford": ("https://salfordcitycouncil.my.site.com", "/pr", "Arcus_BE_Public_Register"),
-    "ashford": ("https://ashfordboroughcouncil.my.site.com", "/pr", "Arcus_BE_Public_Register"),
-    "erewash": ("https://planning.erewash.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "havant": ("https://service.havant.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "reading": ("https://publicregister.reading.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "rochdale": ("https://account.rochdale.gov.uk", "/pr", "Arcus_BE_Public_Register"),
-    "bracknell": ("https://publicaccess.bracknell-forest.gov.uk", "/s", "Arcus_BE_Public_Register"),
+    "allerdale": ("https://cumberlandcouncil.my.site.com", "/pr3", "Arcus_BE_Public_Register", None),
+    "copeland": ("https://cumberlandcouncil.my.site.com", "/pr3", "Arcus_BE_Public_Register", None),
+    "anglesey": ("https://ioacc.my.site.com", "", "Arcus_BE_Public_Register", None),
+    "bromley": ("https://planningaccess.bromley.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "carmarthenshire": ("https://carmarthenshire.my.site.com", "/en", "Arcus_BE_Public_Register", None),
+    "eppingforest": ("https://eppingforestdc.my.site.com", "/pr", "Arcus_BE_Public_Register", None),
+    "haringey": ("https://publicregister.haringey.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "shepway": ("https://folkestonehythedc.my.site.com", "/PR3", "Arcus_BE_Public_Register", None),
+    "southderbyshire": ("https://southderbyshire.my.site.com", "", "Arcus_BE_Public_Register", None),
+    "wrexham": ("https://register.wrexham.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "eastleigh": ("https://planning.eastleigh.gov.uk", "", "Arcus_BE_Public_Register", None),
+    "wiltshire": ("https://development.wiltshire.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "miltonkeynes": ("https://www.be.milton-keynes.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "salford": ("https://salfordcitycouncil.my.site.com", "/pr", "Arcus_BE_Public_Register", None),
+    "ashford": ("https://ashfordboroughcouncil.my.site.com", "/pr", "Arcus_BE_Public_Register", None),
+    "erewash": ("https://planning.erewash.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "havant": ("https://service.havant.gov.uk", "/pr", "Arcus_BE_Public_Register", "APP"),
+    "reading": ("https://publicregister.reading.gov.uk", "/pr", "Arcus_BE_Public_Register", "PL"),
+    "rochdale": ("https://account.rochdale.gov.uk", "/pr", "Arcus_BE_Public_Register", None),
+    "bracknell": ("https://publicaccess.bracknell-forest.gov.uk", "", "Arcus_BE_Public_Register", None),
 }
 
 
@@ -57,17 +58,22 @@ class SalesforceArcusScraper(BaseScraper):
 
     def __init__(self, config: CouncilConfig):
         super().__init__(config)
-        council_cfg = COUNCIL_CONFIG.get(config.authority_code, {})
-        if isinstance(council_cfg, tuple) and len(council_cfg) == 3:
-            self._base_url, self._path_prefix, self._register_name = council_cfg
+        council_cfg = COUNCIL_CONFIG.get(config.authority_code)
+        if council_cfg and len(council_cfg) >= 3:
+            self._base_url = council_cfg[0]
+            self._path_prefix = council_cfg[1]
+            self._register_name = council_cfg[2]
+            self._ref_prefix = council_cfg[3] if len(council_cfg) > 3 else None
         else:
             self._base_url = config.base_url.rstrip("/")
             self._path_prefix = ""
             self._register_name = "Arcus_BE_Public_Register"
+            self._ref_prefix = None
 
         self._aura_url = f"{self._base_url}{self._path_prefix}/s/sfsites/aura"
         self._fwuid = None
         self._app_version = None
+        self._app_name = "siteforce:communityApp"
         self._client = httpx.AsyncClient(
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
             follow_redirects=True,
@@ -84,13 +90,14 @@ class SalesforceArcusScraper(BaseScraper):
         page_url = None
         for path in [
             f"{self._path_prefix}/s/register-view",
+            f"{self._path_prefix}/s/be-register-view",
             "/s/register-view",
             "/s/pr-english",
             "/s/",
         ]:
             try:
                 resp = await self._client.get(f"{self._base_url}{path}")
-                if resp.status_code == 200 and "fwuid" in resp.text:
+                if "fwuid" in resp.text:
                     page_url = f"{self._base_url}{path}"
                     break
             except Exception:
@@ -100,7 +107,8 @@ class SalesforceArcusScraper(BaseScraper):
             resp = await self._client.get(
                 f"{self._base_url}{self._path_prefix}/s/register-view"
             )
-        resp.raise_for_status()
+        if "fwuid" not in resp.text:
+            resp.raise_for_status()
 
         # Extract fwuid and app version from the bootstrap URL
         # The page contains a URL like /sfsites/l/{encoded_json}/bootstrap.js
@@ -111,9 +119,11 @@ class SalesforceArcusScraper(BaseScraper):
                 config = json.loads(decoded)
                 self._fwuid = config.get("fwuid", "")
                 loaded = config.get("loaded", {})
-                self._app_version = loaded.get(
-                    "APPLICATION@markup://siteforce:communityApp", ""
-                )
+                for key in loaded:
+                    if key.startswith("APPLICATION@markup://siteforce:"):
+                        self._app_name = key.replace("APPLICATION@markup://", "")
+                        self._app_version = loaded[key]
+                        break
             except (json.JSONDecodeError, KeyError):
                 pass
 
@@ -149,9 +159,9 @@ class SalesforceArcusScraper(BaseScraper):
         context = {
             "mode": "PROD",
             "fwuid": self._fwuid,
-            "app": "siteforce:communityApp",
+            "app": self._app_name,
             "loaded": {
-                "APPLICATION@markup://siteforce:communityApp": self._app_version or "",
+                f"APPLICATION@markup://{self._app_name}": self._app_version or "",
             },
             "dn": [],
             "globals": {"srcdoc": True},
@@ -191,10 +201,10 @@ class SalesforceArcusScraper(BaseScraper):
 
         years = {date_from.year, date_to.year}
         for year in sorted(years):
-            # Try multiple search terms to cover different reference formats:
-            # "/26" matches EPF/0001/26, DC/123/26, HGY/2025/2661
-            # "2026" matches CON/2026/0020, 5DN/2026/0001
-            search_terms = [f"/{year % 100:02d}", str(year)]
+            yy = f"{year % 100:02d}"
+            search_terms = [f"/{yy}", str(year), f"{yy}/"]
+            if self._ref_prefix:
+                search_terms.insert(0, f"{self._ref_prefix}/{yy}")
             for term in search_terms:
                 try:
                     result = await self._aura_call("PR_SearchService", "search", {
@@ -219,6 +229,7 @@ class SalesforceArcusScraper(BaseScraper):
                     app_id = record.get("Id", "")
                     if not app_id or app_id in seen_ids:
                         continue
+                    name = record.get("Name", "")
                     # Include if date matches range, or if no date available
                     if received and date_from <= received <= date_to:
                         seen_ids.add(app_id)
@@ -226,7 +237,7 @@ class SalesforceArcusScraper(BaseScraper):
                             uid=app_id,
                             url=f"{self._base_url}{self._path_prefix}/s/planning-application/{app_id}",
                         ))
-                    elif not received and str(year) in record.get("Name", ""):
+                    elif not received and (str(year) in name or f"/{yy}" in name or f"{yy}/" in name):
                         seen_ids.add(app_id)
                         all_summaries.append(ApplicationSummary(
                             uid=app_id,
@@ -258,7 +269,10 @@ class SalesforceArcusScraper(BaseScraper):
 
             seen_ids = set()
             for year in sorted(years):
-                search_terms = [f"/{year % 100:02d}", str(year)]
+                yy = f"{year % 100:02d}"
+                search_terms = [f"/{yy}", str(year), f"{yy}/"]
+                if self._ref_prefix:
+                    search_terms.insert(0, f"{self._ref_prefix}/{yy}")
                 for term in search_terms:
                     try:
                         result = await self._aura_call("PR_SearchService", "search", {
@@ -285,30 +299,31 @@ class SalesforceArcusScraper(BaseScraper):
                             continue
                         if received and (received < date_from or received > date_to):
                             continue
-                        if not received and str(year) not in record.get("Name", ""):
+                        name = record.get("Name", "")
+                        if not received and str(year) not in name and f"/{yy}" not in name and f"{yy}/" not in name:
                             continue
                         seen_ids.add(app_id)
-                    address = (
-                        record.get("arcusbuiltenv__Site_Address__c")
-                        or record.get("Hidden_PR_Site_address__c")
-                        or record.get("BROM_Site_Address__c", "")
-                    )
-                    details.append(ApplicationDetail(
-                        reference=record.get("Name", ""),
-                        address=address,
-                        description=record.get("arcusbuiltenv__Proposal__c", ""),
-                        url=f"{self._base_url}{self._path_prefix}/s/planning-application/{app_id}",
-                        application_type=record.get("arcusbuiltenv__Type__c"),
-                        status=record.get("arcusbuiltenv__Status__c"),
-                        decision=record.get("arcusbuiltenv__Current_Decision__c"),
-                        date_received=received,
-                        date_validated=None,
-                        ward=None,
-                        parish=None,
-                        applicant_name=None,
-                        case_officer=None,
-                        raw_data=record,
-                    ))
+                        address = (
+                            record.get("arcusbuiltenv__Site_Address__c")
+                            or record.get("Hidden_PR_Site_address__c")
+                            or record.get("BROM_Site_Address__c", "")
+                        )
+                        details.append(ApplicationDetail(
+                            reference=record.get("Name", ""),
+                            address=address,
+                            description=record.get("arcusbuiltenv__Proposal__c", ""),
+                            url=f"{self._base_url}{self._path_prefix}/s/planning-application/{app_id}",
+                            application_type=record.get("arcusbuiltenv__Type__c"),
+                            status=record.get("arcusbuiltenv__Status__c"),
+                            decision=record.get("arcusbuiltenv__Current_Decision__c"),
+                            date_received=received,
+                            date_validated=None,
+                            ward=None,
+                            parish=None,
+                            applicant_name=None,
+                            case_officer=None,
+                            raw_data=record,
+                        ))
 
             return ScrapeResult(date_from=date_from, date_to=date_to, applications=details)
         except Exception as e:

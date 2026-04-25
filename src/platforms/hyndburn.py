@@ -33,6 +33,12 @@ COUNCIL_CONFIG = {
     "hyndburn": {
         "base_url": "https://planning.hyndburnbc.gov.uk/Northgate/ES/Presentation",
     },
+    "peakdistrict": {
+        "base_url": "https://planning.peakdistrict.gov.uk/AssureLive/ES/Presentation",
+    },
+    "charnwood": {
+        "base_url": "https://planningexplorer.charnwood.gov.uk/Assure/ES/Presentation",
+    },
 }
 
 # Paths relative to base_url

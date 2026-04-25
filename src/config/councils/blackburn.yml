@@ -1,7 +1,7 @@
 name: Blackburn
 authority_code: blackburn
 platform: planning_explorer
-base_url: https://planning.blackburn.gov.uk
+base_url: https://planning.blackburn.gov.uk/Northgate/PlanningExplorer
 schedule: 0 3 * * *
 requires_js: false
 enabled: true

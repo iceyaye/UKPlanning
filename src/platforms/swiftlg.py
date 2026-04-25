@@ -57,19 +57,46 @@ class SwiftLGScraper(BaseScraper):
     async def _accept_disclaimer(self, response, search_url=None):
         """Handle disclaimer/login pages that some SwiftLG sites show first."""
         from bs4 import BeautifulSoup
-        if response.status_code in (301, 302):
-            response = await self._client.get(str(response.headers.get("location", response.url)))
         html = response.text
         soup = BeautifulSoup(html, "lxml")
         accept_form = soup.find("form", action=lambda a: a and "Disclaimer" in a)
         if accept_form:
             action = accept_form.get("action", "")
             accept_url = urljoin(str(response.url), action)
-            await self._client.post(accept_url, data={})
-            # Re-request the original search page now that disclaimer cookie is set
+            hidden_fields = {}
+            for inp in accept_form.find_all("input", {"type": "hidden"}):
+                name = inp.get("name", "")
+                if name:
+                    hidden_fields[name] = inp.get("value", "")
+            await self._client.post(accept_url, data=hidden_fields)
             if search_url:
                 response = await self._client.get(search_url)
         return response
+
+    @staticmethod
+    def _extract_form_fields(html):
+        """Extract all form fields and the form action URL."""
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        fields = {}
+        form = soup.find("form", action=lambda a: a and "WPHAPPCRITERIA" in a.upper())
+        form_action = None
+        if form:
+            form_action = form.get("action", "")
+        else:
+            form = soup
+        for el in form.find_all("input"):
+            name = el.get("name", "")
+            if not name:
+                continue
+            fields[name] = el.get("value", "")
+        for el in form.find_all("select"):
+            name = el.get("name", "")
+            if not name:
+                continue
+            selected = el.find("option", selected=True)
+            fields[name] = selected.get("value", "") if selected else ""
+        return fields, form_action
 
     @staticmethod
     def _extract_aspnet_fields(html):
@@ -87,10 +114,14 @@ class SwiftLGScraper(BaseScraper):
         response = await self._client.get(search_url)
         response = await self._accept_disclaimer(response, search_url=search_url)
         search_html = response.text
-        form_data = self._extract_aspnet_fields(search_html)
+        form_data, form_action = self._extract_form_fields(search_html)
         form_data[self.DATE_FROM_FIELD] = date_from.strftime(self.DATE_FORMAT)
         form_data[self.DATE_TO_FIELD] = date_to.strftime(self.DATE_FORMAT)
-        response = await self._client.post(search_url, data=form_data)
+        if form_action:
+            post_url = urljoin(search_url, form_action)
+        else:
+            post_url = self.config.base_url + "/WPHAPPCRITERIA"
+        response = await self._client.post(post_url, data=form_data)
         html = response.text
         applications = []
         while True:
@@ -99,7 +130,8 @@ class SwiftLGScraper(BaseScraper):
             next_el = self._parser.select_one(html, self._search_selectors["next_page"])
             if next_el is None:
                 break
-            next_url = urljoin(self.config.base_url, next_el.get("href", ""))
+            base = self.config.base_url.rstrip("/") + "/"
+            next_url = urljoin(base, next_el.get("href", ""))
             html = await self._client.get_html(next_url)
         return applications
 

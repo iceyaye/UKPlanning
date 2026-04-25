@@ -1,6 +1,6 @@
 name: Charnwood
 authority_code: charnwood
-platform: northgate
+platform: northgate_assure
 base_url: https://planningexplorer.charnwood.gov.uk
 schedule: 0 3 * * *
 requires_js: false

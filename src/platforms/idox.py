@@ -64,7 +64,7 @@ class IdoxScraper(BaseScraper):
         super().__init__(config)
         self._parser = PageParser()
         self._client = HttpClient(
-            timeout=30,
+            timeout=120,
             rate_limit_delay=config.rate_limit_delay,
         )
         self._search_selectors = {**IDOX_SEARCH_SELECTORS}

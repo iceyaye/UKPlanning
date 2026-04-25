@@ -93,13 +93,16 @@ class PlanningRegisterScraper(BaseScraper):
         """Accept the site disclaimer to get a session cookie."""
         if self._disclaimer_accepted:
             return
-        # GET the disclaimer page first to establish session cookie
-        await self._client.get(
+        resp = await self._client.get(
             f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
         )
-        # Then POST to accept
+        # Try POST to /Disclaimer/Accept (most councils)
         await self._client.post(
             f"{self._base_url}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
+        )
+        # Also try GET with accepted=True (some councils use this pattern)
+        await self._client.get(
+            f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced&accepted=True"
         )
         self._disclaimer_accepted = True
 
@@ -142,14 +145,14 @@ class PlanningRegisterScraper(BaseScraper):
 
             # Find all detail links regardless of page structure (table or div)
             page_count = 0
-            for link in soup.find_all("a", href=re.compile(r"/Planning/Display/")):
+            for link in soup.find_all("a", href=re.compile(r"/Planning/Display")):
                 href = link.get("href", "")
                 if href in seen:
                     continue
                 seen.add(href)
                 page_count += 1
 
-                ref_match = re.search(r"/Planning/Display/(.+)$", href)
+                ref_match = re.search(r"/Planning/Display[/?](?:applicationNumber=)?(.+)$", href)
                 ref = ref_match.group(1) if ref_match else href
 
                 full_url = f"{self._base_url}{href}" if href.startswith("/") else href

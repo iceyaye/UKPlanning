@@ -4,4 +4,4 @@ platform: planning_explorer
 base_url: https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false

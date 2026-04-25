@@ -4,4 +4,5 @@ platform: swiftlg
 base_url: https://planning.devon.gov.uk/swiftlg/apas/run
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+notes: SwiftLG backend removed; site rebuilt as modern MVC app at /Search/Advanced (2026-04)

@@ -1,7 +1,7 @@
 name: Walsall
 authority_code: walsall
 platform: swiftlg
-base_url: https://planning.walsall.gov.uk/swift/apas/run/wphappcriteria.display
+base_url: https://planning.walsall.gov.uk/swift/apas/run
 schedule: 0 3 * * *
 requires_js: false
 enabled: true

@@ -1,7 +1,7 @@
 name: PeakDistrict
 authority_code: peakdistrict
-platform: planning_explorer
-base_url: https://portal.peakdistrict.gov.uk
+platform: northgate_assure
+base_url: https://planning.peakdistrict.gov.uk
 schedule: 0 3 * * *
 requires_js: false
 enabled: true

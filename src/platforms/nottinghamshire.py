@@ -85,6 +85,16 @@ class NottinghamshireScraper(BaseScraper):
         """Visit the home page to establish session cookie."""
         await self._client.get(f"{BASE_URL}/planhome.aspx")
 
+    async def _handle_disclaimer(self, resp) -> httpx.Response:
+        """Accept mid-flow disclaimer if the response is a disclaimer page."""
+        if "Disclaimer" not in str(resp.url):
+            return resp
+        fields = _extract_hidden_fields(resp.text)
+        fields["ctl00$MainContent$btnAccept"] = "Accept"
+        resp = await self._client.post(str(resp.url), data=fields)
+        resp.raise_for_status()
+        return resp
+
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         await self._accept_disclaimer()
 
@@ -115,6 +125,7 @@ class NottinghamshireScraper(BaseScraper):
 
         resp = await self._client.post(SEARCH_URL, data=fields)
         resp.raise_for_status()
+        resp = await self._handle_disclaimer(resp)
 
         # Parse all pages of results
         summaries = []

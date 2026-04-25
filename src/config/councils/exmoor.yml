@@ -4,4 +4,4 @@ platform: planning_register
 base_url: https://exmoor.planning-register.co.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
