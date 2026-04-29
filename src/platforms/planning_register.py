@@ -62,6 +62,7 @@ COUNCIL_URLS = {
     "northwarwickshire": "https://planning.northwarks.gov.uk",
     "southoxfordshire": "https://southoxfordshire.planning-register.co.uk",
     "whitehorse": "https://valeofwhitehorse.planning-register.co.uk",
+    "bridgend": "https://planning.bridgend.gov.uk",
 }
 
 

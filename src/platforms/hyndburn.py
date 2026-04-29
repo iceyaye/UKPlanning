@@ -32,18 +32,23 @@ from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 COUNCIL_CONFIG = {
     "hyndburn": {
         "base_url": "https://planning.hyndburnbc.gov.uk/Northgate/ES/Presentation",
+        "keywords": ["BB5", "BB1", "BB6", "BB4", "BB"],
     },
     "peakdistrict": {
         "base_url": "https://planning.peakdistrict.gov.uk/AssureLive/ES/Presentation",
+        "keywords": ["DE", "SK", "S3"],
     },
     "charnwood": {
         "base_url": "https://planningexplorer.charnwood.gov.uk/Assure/ES/Presentation",
+        "keywords": ["LE", "LE11", "LE12"],
     },
     "hounslow": {
         "base_url": "https://planningandbuilding.hounslow.gov.uk/NECSWS/ES/Presentation",
+        "keywords": ["TW", "W4", "W3", "TW3", "TW4"],
     },
     "broxbourne": {
         "base_url": "https://planning.broxbourne.gov.uk/LPAssure/ES/Presentation",
+        "keywords": ["EN", "EN10", "EN7", "EN8"],
     },
 }
 
@@ -82,6 +87,7 @@ class NorthgateAssureScraper(BaseScraper):
         super().__init__(config)
         cfg = COUNCIL_CONFIG.get(config.authority_code, {})
         self._base_url = cfg.get("base_url", config.base_url)
+        self._keywords = cfg.get("keywords", ["plan", "app", "house"])
         self._client = httpx.AsyncClient(
             headers={
                 "User-Agent": (
@@ -178,7 +184,7 @@ class NorthgateAssureScraper(BaseScraper):
         # We search with common keywords that match broadly.
         all_summaries: List[ApplicationSummary] = []
 
-        for keyword in ["BB5", "BB1", "BB6", "BB4", "BB"]:
+        for keyword in self._keywords:
             form = self._build_search_form(
                 search_input=keyword,
                 from_date=date_from,
@@ -216,35 +222,27 @@ class NorthgateAssureScraper(BaseScraper):
         self, date_from: date, date_to: date
     ) -> List[ApplicationSummary]:
         """Use weekly/monthly list endpoint as fallback search strategy."""
-        days = (date_to - date_from).days
-
-        form = self._build_search_form()
-        if days <= 7:
-            form["IsWeeklyListSearch"] = "true"
-            form["IsMonthlyListSearch"] = "false"
-            form["StatusOptions"] = "PastWeek"
-        else:
-            form["IsWeeklyListSearch"] = "false"
-            form["IsMonthlyListSearch"] = "true"
-            form["StatusOptions"] = "PastMonth"
-
-        form["ValidatedThisWeek"] = "true" if days <= 7 else "false"
-        form["DecidedThisWeek"] = "true" if days <= 7 else "false"
-        form["ValidatedThisMonth"] = "false" if days <= 7 else "true"
-        form["DecidedThisMonth"] = "false" if days <= 7 else "true"
-
-        try:
-            resp = await self._client.post(
-                self._base_url + WEEKLY_MONTHLY_RESULTS,
-                data=form,
-                headers=self._ajax_headers(),
-            )
-            if resp.status_code != 200:
-                return []
-
-            return self._parse_search_results(resp.text)
-        except httpx.HTTPError:
-            return []
+        # Try weekly list first (works on most councils), then monthly
+        for is_weekly in [True, False]:
+            form = {
+                "SearchFor": "PlanningApplications",
+                "IsWeeklyListSearch": "true" if is_weekly else "false",
+                "IsMonthlyListSearch": "false" if is_weekly else "true",
+            }
+            try:
+                resp = await self._client.post(
+                    self._base_url + WEEKLY_MONTHLY_RESULTS,
+                    data=form,
+                    headers=self._ajax_headers(),
+                )
+                if resp.status_code != 200:
+                    continue
+                results = self._parse_search_results(resp.text)
+                if results:
+                    return results
+            except httpx.HTTPError:
+                continue
+        return []
 
     async def _paginate_results(
         self,

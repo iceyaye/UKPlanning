@@ -4,5 +4,4 @@ platform: northgate_assure
 base_url: https://planning.broxbourne.gov.uk/LPAssure/ES/Presentation
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# Northgate Assure — scraper connects but AJAX returns 0 results, needs debugging
+enabled: true
