@@ -176,20 +176,8 @@ class PlanningRegisterScraper(BaseScraper):
             if page_count == 0:
                 break
 
-            next_link = soup.find("a", string=re.compile(r"^\s*Next\s*$"))
-            if not next_link:
-                # Fallback: numbered AJAX pager links (e.g. Bridgend)
-                pager = soup.find("ul", class_="ajax-pager")
-                if pager:
-                    page_link = pager.find("a", string=str(page_num + 1))
-                    if page_link:
-                        next_link = page_link
-
-            if not next_link:
-                break
-
-            next_href = next_link.get("data-ajax-target") or next_link.get("href", "")
-            if not next_href or next_href == "#":
+            next_href = self._find_next_page(soup, page_num)
+            if not next_href:
                 break
 
             next_url = f"{self._base_url}{next_href}" if next_href.startswith("/") else next_href
@@ -200,6 +188,29 @@ class PlanningRegisterScraper(BaseScraper):
             resp.raise_for_status()
 
         return summaries
+
+    @staticmethod
+    def _find_next_page(soup, current_page: int) -> Optional[str]:
+        """Find the URL for the next page of results."""
+        # Pattern 1: "Next" text link
+        next_link = soup.find("a", string=re.compile(r"^\s*Next\s*$"))
+        if next_link:
+            return next_link.get("data-ajax-target") or next_link.get("href") or None
+
+        # Pattern 2: » (right double angle) link
+        next_link = soup.find("a", string=re.compile(r"^\s*[»›]\s*$"))
+        if next_link:
+            return next_link.get("data-ajax-target") or next_link.get("href") or None
+
+        # Pattern 3: numbered AJAX pager (e.g. Bridgend)
+        for pager in soup.find_all(["ul", "div"], class_=re.compile(r"ajax-pager|pager|pagination")):
+            page_link = pager.find("a", string=str(current_page + 1))
+            if page_link:
+                href = page_link.get("data-ajax-target") or page_link.get("href")
+                if href and href != "#":
+                    return href
+
+        return None
 
     async def fetch_detail(self, application: ApplicationSummary) -> ApplicationDetail:
         """Fetch application detail page."""
