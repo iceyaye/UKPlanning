@@ -1,9 +1,7 @@
 name: Preston
 authority_code: preston
-platform: bespoke
-base_url: https://selfservice.preston.gov.uk/service/planning/ApplicationSearch.aspx
+platform: preston
+base_url: https://www.preston.gov.uk/weekly-lists
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-archived: true
-# disabled_reason: ARCHIVED - confirmed inaccessible
+enabled: true

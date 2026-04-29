@@ -1,8 +1,7 @@
 name: Anglesey
 authority_code: anglesey
-platform: salesforce
+platform: salesforce_direct
 base_url: https://ioacc.my.site.com/s/pr-english
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# Salesforce Aura API blocked — PR_SearchService access denied
+enabled: true

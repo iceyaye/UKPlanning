@@ -15,6 +15,7 @@ from src.platforms.northlincs import NorthLincsScraper
 from src.platforms.planning_explorer import PlanningExplorerScraper
 from src.platforms.planning_register import PlanningRegisterScraper
 from src.platforms.salesforce_arcus import SalesforceArcusScraper
+from src.platforms.salesforce_direct import SalesforceDirectScraper
 from src.platforms.swiftlg import SwiftLGScraper, SwiftLGLabelScraper
 from src.platforms.acolnet import CentralBedfordshireScraper
 from src.platforms.civica import CivicaScraper
@@ -41,6 +42,8 @@ from src.platforms.scillyisles import ScillyIslesScraper
 from src.platforms.elmbridge import ElmbridgeScraper
 from src.platforms.ipswich import IpswichScraper
 from src.platforms.eastsussex import EastSussexScraper
+from src.platforms.preston import PrestonScraper
+from src.platforms.southderbyshire import SouthDerbyshireScraper
 
 
 class ScraperRegistry:
@@ -66,6 +69,7 @@ class ScraperRegistry:
             "fastweb": FastwebScraper,
             "northlincs": NorthLincsScraper,
             "salesforce": SalesforceArcusScraper,
+            "salesforce_direct": SalesforceDirectScraper,
             "acolnet": CentralBedfordshireScraper,
             "civica": CivicaScraper,
             "rochford": RochfordScraper,
@@ -94,6 +98,8 @@ class ScraperRegistry:
             "elmbridge": ElmbridgeScraper,
             "ipswich": IpswichScraper,
             "eastsussex": EastSussexScraper,
+            "preston": PrestonScraper,
+            "southderbyshire_livewire": SouthDerbyshireScraper,
         }
 
     def get_scraper_class(self, platform):
