@@ -4,5 +4,4 @@ platform: planning_register
 base_url: https://southoxfordshire.planning-register.co.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# Migrated to planning-register.co.uk but search results require JavaScript rendering
+enabled: true

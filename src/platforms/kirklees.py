@@ -16,12 +16,16 @@ from src.core.config import CouncilConfig
 from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 
 BASE_URL = "https://www.kirklees.gov.uk/beta/planning-applications/search-for-planning-applications"
+WEEKLY_URL = "https://www.kirklees.gov.uk/beta/planning-applications/weekly-list-of-planning-applications/default.aspx"
 SEARCH_URL = f"{BASE_URL}/default.aspx"
 DETAIL_URL = f"{BASE_URL}/detail.aspx"
 
 DATE_FROM_FIELD = "ctl00$ctl00$cphPageBody$cphContent$txtDateFrom"
 DATE_TO_FIELD = "ctl00$ctl00$cphPageBody$cphContent$txtDateTo"
 SEARCH_SUBMIT = "ctl00$ctl00$cphPageBody$cphContent$btnAdvSearch"
+WEEKLY_DROPDOWN = "ctl00$ctl00$cphPageBody$cphContent$ddlWeekList"
+WEEKLY_TYPE = "ctl00$ctl00$cphPageBody$cphContent$radTypeList"
+WEEKLY_SUBMIT = "ctl00$ctl00$cphPageBody$cphContent$btnSearch"
 NEXT_PAGE_TARGET = "ctl00$ctl00$cphPageBody$cphContent$dpSearchResultsAbove$ctl02$ctl00"
 FORM_ID = "aspnetForm"
 
@@ -59,59 +63,60 @@ class KirkleesScraper(BaseScraper):
         )
 
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
-        # Phase 1: GET the advanced search page to obtain ViewState
-        resp = await self._client.get(f"{SEARCH_URL}?advanced_search=true")
+        """Search via weekly list form — select weeks overlapping the date range."""
+        # GET the weekly list page
+        resp = await self._client.get(WEEKLY_URL)
         resp.raise_for_status()
         fields = _extract_hidden_fields(resp.text)
 
-        # Phase 2: POST search with date range
-        fields[DATE_FROM_FIELD] = date_from.strftime("%d/%m/%Y")
-        fields[DATE_TO_FIELD] = date_to.strftime("%d/%m/%Y")
-        fields[SEARCH_SUBMIT] = "Search"
-
-        resp = await self._client.post(SEARCH_URL, data=fields)
-        resp.raise_for_status()
-
-        # Phase 3: Paginate through results
-        summaries: List[ApplicationSummary] = []
-        max_pages = 100
-        prev_first_uid = None
-
-        for _ in range(max_pages):
-            page_summaries = self._parse_results_page(resp.text)
-            if not page_summaries:
-                break
-
-            # Loop detection: stop if first UID matches previous page
-            if page_summaries[0].uid == prev_first_uid:
-                break
-
-            prev_first_uid = page_summaries[0].uid
-            summaries.extend(page_summaries)
-
-            # POST to get next page via __EVENTTARGET postback
-            next_fields = _extract_hidden_fields(resp.text)
-            next_fields["__EVENTTARGET"] = NEXT_PAGE_TARGET
-            next_fields["__EVENTARGUMENT"] = ""
-            next_fields.pop(SEARCH_SUBMIT, None)
-
-            try:
-                resp = await self._client.post(SEARCH_URL, data=next_fields)
-                resp.raise_for_status()
-            except httpx.HTTPError:
-                break
-
-        return summaries
-
-    def _parse_results_page(self, html: str) -> List[ApplicationSummary]:
-        """Extract application summaries from a search results page."""
-        soup = BeautifulSoup(html, "html.parser")
-        results_div = soup.find("div", id="searchResults")
-        if not results_div:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        select = soup.find("select", {"name": WEEKLY_DROPDOWN})
+        if not select:
             return []
 
+        # Find weeks that overlap our date range
+        all_summaries: List[ApplicationSummary] = []
+        seen_uids = set()
+
+        for option in select.find_all("option"):
+            val = option.get("value", "")
+            if not val:
+                continue
+            # Value is like "20/04/2026 00:00:00"
+            try:
+                week_start = datetime.strptime(val.split(" ")[0], "%d/%m/%Y").date()
+            except ValueError:
+                continue
+            week_end = week_start + __import__("datetime").timedelta(days=6)
+            if week_end < date_from or week_start > date_to:
+                continue
+
+            # Submit the form for this week
+            week_fields = dict(fields)
+            week_fields[WEEKLY_DROPDOWN] = val
+            week_fields[WEEKLY_TYPE] = "1"  # Received
+            week_fields[WEEKLY_SUBMIT] = "Search"
+
+            resp = await self._client.post(WEEKLY_URL, data=week_fields)
+            resp.raise_for_status()
+
+            page_summaries = self._parse_results_page(resp.text)
+            for s in page_summaries:
+                if s.uid not in seen_uids:
+                    seen_uids.add(s.uid)
+                    all_summaries.append(s)
+
+            # Re-extract fields for next week submission
+            fields = _extract_hidden_fields(resp.text)
+
+        return all_summaries
+
+    def _parse_results_page(self, html: str) -> List[ApplicationSummary]:
+        """Extract application summaries from search or weekly list results."""
+        soup = BeautifulSoup(html, "html.parser")
+
         summaries = []
-        for link in results_div.find_all("a", href=re.compile(r"detail\.aspx")):
+        for link in soup.find_all("a", href=re.compile(r"detail\.aspx")):
             href = link.get("href", "")
             url = urljoin(SEARCH_URL, href)
 
@@ -119,7 +124,7 @@ class KirkleesScraper(BaseScraper):
             h4 = link.find("h4")
             if h4:
                 text = h4.get_text(strip=True)
-                uid_match = re.search(r"Application\s+(.+)", text)
+                uid_match = re.search(r"Application\s*(.+)", text)
                 uid = uid_match.group(1).strip() if uid_match else text
             else:
                 uid = link.get_text(strip=True)

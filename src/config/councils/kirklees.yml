@@ -4,5 +4,4 @@ platform: kirklees
 base_url: https://www.kirklees.gov.uk/beta/planning-applications/search-for-planning-applications/default.aspx
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# Search is JavaScript-driven (not ASP.NET postback) — needs Playwright
+enabled: true
