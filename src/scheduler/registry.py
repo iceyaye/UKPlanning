@@ -37,6 +37,10 @@ from src.platforms.hyndburn import NorthgateAssureScraper
 from src.platforms.liverpool import LiverpoolScraper
 from src.platforms.northgate import NorthgateScraper
 from src.platforms.ocella import OcellaScraper
+from src.platforms.scillyisles import ScillyIslesScraper
+from src.platforms.elmbridge import ElmbridgeScraper
+from src.platforms.ipswich import IpswichScraper
+from src.platforms.eastsussex import EastSussexScraper
 
 
 class ScraperRegistry:
@@ -86,6 +90,10 @@ class ScraperRegistry:
             "northgate_assure": NorthgateAssureScraper,
             "ocella": OcellaScraper,
             "northgate": NorthgateScraper,
+            "scillyisles": ScillyIslesScraper,
+            "elmbridge": ElmbridgeScraper,
+            "ipswich": IpswichScraper,
+            "eastsussex": EastSussexScraper,
         }
 
     def get_scraper_class(self, platform):

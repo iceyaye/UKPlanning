@@ -1,8 +1,7 @@
 name: Elmbridge
 authority_code: elmbridge
-platform: idox
-base_url: https://emaps.elmbridge.gov.uk/online-applications
+platform: elmbridge
+base_url: https://emaps.elmbridge.gov.uk/ebc_planning.aspx
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# disabled_reason: Template file removed - portal decommissioned. Confirmed via Playwright.
+enabled: true

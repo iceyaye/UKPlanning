@@ -1,8 +1,8 @@
 name: ScillyIsles
 authority_code: scillyisles
-platform: unsupported
-base_url: "http://www.scilly.gov.uk/planning-development"
+platform: scillyisles
+base_url: "https://www.scilly.gov.uk"
 schedule: "0 3 * * *"
 requires_js: false
 enabled: false
-# disabled_reason: Gazette/PDF only - no searchable application database. Confirmed via Playwright.
+# Pantheon WAF blocks httpx (403) — needs Playwright or curl subprocess

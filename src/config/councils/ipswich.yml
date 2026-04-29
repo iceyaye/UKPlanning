@@ -1,7 +1,7 @@
 name: Ipswich
 authority_code: ipswich
-platform: swiftlg
-base_url: https://ppc.ipswich.gov.uk/swiftlg/apas/run
+platform: ipswich
+base_url: https://ppc.ipswich.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
+enabled: true

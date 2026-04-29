@@ -1,8 +1,8 @@
 name: EastSussex
 authority_code: eastsussex
-platform: bespoke
-base_url: https://apps.eastsussex.gov.uk/environment/planning/applications/register/
+platform: eastsussex
+base_url: https://apps.eastsussex.gov.uk/environment/planning/applications/register
 schedule: 0 3 * * *
-requires_js: false
-enabled: false
-# disabled_reason: Blazor Server (SignalR websocket) - form submits don't work without SignalR.
+requires_js: true
+enabled: true
+batch_size_days: 30
