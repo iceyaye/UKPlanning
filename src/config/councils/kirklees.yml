@@ -5,4 +5,4 @@ base_url: https://www.kirklees.gov.uk/beta/planning-applications/search-for-plan
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# Scraper exists but returns 0 results — needs debugging
+# Search is JavaScript-driven (not ASP.NET postback) — needs Playwright
