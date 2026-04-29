@@ -4,5 +4,4 @@ platform: acolnet
 base_url: https://plantech.centralbedfordshire.gov.uk/PLANTECH/DCWebPages/acolnetcgi.gov
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# Acolnet portal alive but scraper returns 0 results — needs debugging
+enabled: true

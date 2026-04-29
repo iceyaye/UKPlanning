@@ -130,12 +130,16 @@ class AcolnetScraper(BaseScraper):
         """POST date-range search to Acolnet and paginate through results."""
         search_url = self.config.base_url
 
-        # Load search page first (establishes any session/cookies)
-        await self._client.get(search_url)
+        # Load search page first (establishes session and gets form action with RIPSESSION)
+        response = await self._client.get(search_url)
+        search_html = response.text
+        soup = BeautifulSoup(search_html, "lxml")
+        form = soup.find("form", {"name": self._search_form})
+        if form and form.get("action"):
+            action = form["action"]
+            search_url = urljoin(str(response.url), action)
 
         form_data = {
-            "ACTION": "UNWRAP",
-            "RIPESSION": "",
             self._date_from_field: date_from.strftime(self.DATE_FORMAT),
             self._date_to_field: date_to.strftime(self.DATE_FORMAT),
         }
