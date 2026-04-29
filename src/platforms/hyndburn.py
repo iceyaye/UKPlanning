@@ -239,6 +239,9 @@ class NorthgateAssureScraper(BaseScraper):
                     continue
                 results = self._parse_search_results(resp.text)
                 if results:
+                    results = await self._paginate_results(
+                        resp.text, form, results
+                    )
                     return results
             except httpx.HTTPError:
                 continue

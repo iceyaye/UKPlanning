@@ -178,6 +178,14 @@ class PlanningRegisterScraper(BaseScraper):
 
             next_link = soup.find("a", string=re.compile(r"^\s*Next\s*$"))
             if not next_link:
+                # Fallback: numbered AJAX pager links (e.g. Bridgend)
+                pager = soup.find("ul", class_="ajax-pager")
+                if pager:
+                    page_link = pager.find("a", string=str(page_num + 1))
+                    if page_link:
+                        next_link = page_link
+
+            if not next_link:
                 break
 
             next_href = next_link.get("data-ajax-target") or next_link.get("href", "")
