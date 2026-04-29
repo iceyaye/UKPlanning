@@ -1,8 +1,8 @@
 name: Broxbourne
 authority_code: broxbourne
 platform: northgate_assure
-base_url: https://planning.broxbourne.gov.uk/LPAssure/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningSearch
+base_url: https://planning.broxbourne.gov.uk/LPAssure/ES/Presentation
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# disabled_reason: Northgate Assure - reports 'Unsupported Web Browser' even in Playwright.
+# Northgate Assure — scraper connects but AJAX returns 0 results, needs debugging

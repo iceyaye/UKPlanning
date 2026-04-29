@@ -1,7 +1,8 @@
 name: Bridgend
 authority_code: bridgend
-platform: planning_explorer
-base_url: https://planning.bridgend.gov.uk
+platform: ocella
+base_url: https://planning.bridgend.gov.uk/OcellaWeb
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+# Ocella behind disclaimer — needs disclaimer handling added to ocella scraper

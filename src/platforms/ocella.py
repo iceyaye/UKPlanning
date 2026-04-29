@@ -20,6 +20,7 @@ COUNCIL_URLS = {
     "hillingdon": "https://planning.hillingdon.gov.uk/OcellaWeb",
     "southholland": "https://planning.sholland.gov.uk/OcellaWeb",
     "havering": "https://development.havering.gov.uk/OcellaWeb",
+    "bridgend": "https://planning.bridgend.gov.uk/OcellaWeb",
 }
 
 

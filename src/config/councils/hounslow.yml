@@ -1,8 +1,8 @@
 name: Hounslow
 authority_code: hounslow
-platform: bespoke
-base_url: https://planning.hounslow.gov.uk/
+platform: northgate_assure
+base_url: https://planningandbuilding.hounslow.gov.uk/NECSWS/ES/Presentation
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# disabled_reason: Northgate EnterpriseStore - reports 'Unsupported Web Browser' even in Playwright.
+# Northgate Assure — scraper connects but AJAX returns 0 results, needs debugging

@@ -39,6 +39,12 @@ COUNCIL_CONFIG = {
     "charnwood": {
         "base_url": "https://planningexplorer.charnwood.gov.uk/Assure/ES/Presentation",
     },
+    "hounslow": {
+        "base_url": "https://planningandbuilding.hounslow.gov.uk/NECSWS/ES/Presentation",
+    },
+    "broxbourne": {
+        "base_url": "https://planning.broxbourne.gov.uk/LPAssure/ES/Presentation",
+    },
 }
 
 # Paths relative to base_url
