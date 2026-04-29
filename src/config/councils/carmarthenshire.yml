@@ -5,3 +5,4 @@ base_url: https://carmarthenshire.my.site.com/en/s/
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+# Salesforce Aura API blocked — no apex action available for search

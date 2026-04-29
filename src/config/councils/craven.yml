@@ -5,5 +5,4 @@ base_url: https://publicaccess.cravendc.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-archived: true
-# disabled_reason: ARCHIVED - confirmed inaccessible
+# Council merged into North Yorkshire 2023 — portal accessible but no new applications

@@ -1,7 +1,8 @@
 name: Wiltshire
 authority_code: wiltshire
 platform: salesforce
-base_url: https://development.wiltshire.gov.uk
+base_url: https://development.wiltshire.gov.uk/pr/s/
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+# Salesforce Aura API blocked — PR_SearchService access denied

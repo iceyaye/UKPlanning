@@ -7,6 +7,8 @@ This module defines the default selectors and the scraper class.
 from datetime import date, timedelta
 from urllib.parse import urljoin
 
+from bs4 import BeautifulSoup
+
 from src.core.browser import HttpClient
 from src.core.config import CouncilConfig
 from src.core.parser import PageParser
@@ -78,12 +80,33 @@ class IdoxScraper(BaseScraper):
                     if key in sel_dict:
                         sel_dict[key] = val
 
+    async def _accept_disclaimer(self, response):
+        """Handle disclaimer pages that some Idox sites show before search."""
+        url_str = str(response.url)
+        if "Disclaimer" not in response.text and "disclaimer" not in url_str.lower():
+            return response
+        soup = BeautifulSoup(response.text, "lxml")
+        form = soup.find("form", action=lambda a: a and "Disclaimer" in a)
+        if form:
+            action = form.get("action", "")
+            post_url = urljoin(url_str, action)
+            form_data = {}
+            for inp in form.find_all("input"):
+                name = inp.get("name", "")
+                if name:
+                    form_data[name] = inp.get("value", "")
+            response = await self._client.post(post_url, data=form_data)
+        return response
+
     async def gather_ids(self, date_from: date, date_to: date) -> list[ApplicationSummary]:
         """Search Idox portal for applications in date range, handling pagination."""
         search_url = self.config.base_url + self.SEARCH_PATH
 
         # Load search page to get CSRF token, session cookies, and real base URL (after redirects)
         response = await self._client.get(search_url)
+        response = await self._accept_disclaimer(response)
+        if "Disclaimer" in str(response.url):
+            response = await self._client.get(search_url)
         search_html = response.text
         real_base = str(response.url).split("/search.do")[0]
         csrf_token = self._extract_csrf(search_html)

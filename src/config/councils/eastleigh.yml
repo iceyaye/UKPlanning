@@ -1,7 +1,8 @@
 name: Eastleigh
 authority_code: eastleigh
 platform: salesforce
-base_url: https://planning.eastleigh.gov.uk
+base_url: https://planning.eastleigh.gov.uk/s/public-register
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+# Salesforce Aura API blocked — no apex action available for search

@@ -44,6 +44,7 @@ COUNCIL_URLS = {
     "wychavon": "https://plan.wychavon.gov.uk",
     "kent": "https://www.kentplanningapplications.co.uk",
     "exmoor": "https://exmoor.planning-register.co.uk",
+    "devon": "https://planning.devon.gov.uk",
     "cherwell": "https://planningregister.cherwell.gov.uk",
     "fylde": "https://pa.fylde.gov.uk",
     "malvernhills": "https://plan.malvernhills.gov.uk",
@@ -96,14 +97,23 @@ class PlanningRegisterScraper(BaseScraper):
         resp = await self._client.get(
             f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
         )
-        # Try POST to /Disclaimer/Accept (most councils)
-        await self._client.post(
-            f"{self._base_url}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
-        )
-        # Also try GET with accepted=True (some councils use this pattern)
-        await self._client.get(
-            f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced&accepted=True"
-        )
+        html = resp.text
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.find("form", action=lambda a: a and "Disclaimer" in a)
+        if form:
+            action = form.get("action", "")
+            post_url = f"{self._base_url}{action}" if action.startswith("/") else action
+            form_data = {}
+            for inp in form.find_all("input", {"type": "hidden"}):
+                name = inp.get("name", "")
+                if name:
+                    form_data[name] = inp.get("value", "")
+            await self._client.post(post_url, data=form_data)
+        else:
+            # Fallback: try known endpoints
+            await self._client.post(
+                f"{self._base_url}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
+            )
         self._disclaimer_accepted = True
 
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:

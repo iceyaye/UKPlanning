@@ -1,8 +1,8 @@
 name: NorthWarwickshire
 authority_code: northwarwickshire
-platform: swiftlg
-base_url: https://planning.northwarks.gov.uk/swiftlg/apas/run
+platform: idox
+base_url: https://planning.northwarks.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-notes: SwiftLG backend removed; site rebuilt as modern MVC app with reCAPTCHA at /Search (2026-04)
+# reCAPTCHA on search — no date-range endpoint available

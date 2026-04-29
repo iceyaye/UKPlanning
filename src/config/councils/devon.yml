@@ -1,8 +1,7 @@
 name: Devon
 authority_code: devon
-platform: swiftlg
-base_url: https://planning.devon.gov.uk/swiftlg/apas/run
+platform: planning_register
+base_url: https://planning.devon.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-notes: SwiftLG backend removed; site rebuilt as modern MVC app at /Search/Advanced (2026-04)
+enabled: true
