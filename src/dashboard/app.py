@@ -22,12 +22,19 @@ def _get_disabled_councils():
         data = yaml.safe_load(content)
         if data.get("enabled") is False:
             reason_match = re.search(r"# disabled_reason: (.+)", content)
+            if reason_match:
+                reason = reason_match.group(1)
+            else:
+                comment_match = re.search(r"^# (.+)$", content, re.MULTILINE)
+                reason = comment_match.group(1) if comment_match else "No reason specified"
+            status = data.get("status", "")
             disabled.append({
                 "authority_code": data["authority_code"],
                 "name": data.get("name", data["authority_code"]),
                 "platform": data.get("platform", ""),
-                "reason": reason_match.group(1) if reason_match else "No reason specified",
+                "reason": reason,
                 "archived": data.get("archived", False),
+                "status": status,
             })
     return disabled
 

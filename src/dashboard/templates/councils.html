@@ -55,20 +55,36 @@
     </tbody>
 </table>
 
-{% if disabled_councils %}
-<h2 style="margin-top:2rem;">Disabled Councils ({{ disabled_councils|length }})</h2>
-<p style="color:#666;font-size:0.9rem;">These councils have been investigated but cannot currently be scraped. Each has a documented reason.</p>
+{% set deleted_councils = disabled_councils|selectattr("status", "equalto", "DELETED")|list %}
+{% set blocked_councils = disabled_councils|rejectattr("status", "equalto", "DELETED")|list %}
+
+{% if blocked_councils %}
+<h2 style="margin-top:2rem;">Blocked Councils ({{ blocked_councils|length }})</h2>
+<p style="color:#666;font-size:0.9rem;">Active planning authorities we cannot currently scrape. Each has a documented reason.</p>
 <table>
     <thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Reason</th></tr></thead>
     <tbody>
-    {% for c in disabled_councils %}
+    {% for c in blocked_councils %}
     <tr style="opacity:0.7;">
         <td>{{ c.name }}</td>
         <td>{{ c.platform or 'N/A' }}</td>
-        <td>
-            {% if c.archived %}<span class="badge badge-danger">Archived</span>
-            {% else %}<span class="badge badge-warning">Blocked</span>{% endif %}
-        </td>
+        <td><span class="badge badge-warning">Blocked</span></td>
+        <td style="font-size:0.85rem;color:#555;">{{ c.reason }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if deleted_councils %}
+<h2 style="margin-top:2rem;">Deleted Councils ({{ deleted_councils|length }})</h2>
+<p style="color:#666;font-size:0.9rem;">Abolished, merged, or no longer planning authorities.</p>
+<table>
+    <thead><tr><th>Name</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for c in deleted_councils %}
+    <tr style="opacity:0.4;">
+        <td>{{ c.name }}</td>
         <td style="font-size:0.85rem;color:#555;">{{ c.reason }}</td>
     </tr>
     {% endfor %}
