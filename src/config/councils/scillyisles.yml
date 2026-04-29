@@ -4,5 +4,4 @@ platform: scillyisles
 base_url: "https://www.scilly.gov.uk"
 schedule: "0 3 * * *"
 requires_js: false
-enabled: false
-# Pantheon WAF blocks httpx (403) — needs Playwright or curl subprocess
+enabled: true

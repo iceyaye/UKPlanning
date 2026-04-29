@@ -4,18 +4,43 @@ Drupal 7 planning register at scilly.gov.uk. Lists ALL applications
 in a paginated HTML table (?page=N, 0-indexed). Detail pages use
 Drupal field divs. Since there's no date search, we gather all
 applications and filter by date_received.
+
+Uses curl subprocess instead of httpx because Pantheon WAF blocks
+Python HTTP clients via TLS fingerprinting.
 """
+import asyncio
 import re
 from datetime import date, datetime
 from typing import List, Optional
 
-import httpx
 from bs4 import BeautifulSoup
 
 from src.core.config import CouncilConfig
 from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 
 LIST_PATH = "/planning-development/planning-applications"
+
+_CURL_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+async def _curl_get(url: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "curl", "-s", "-L",
+        "-H", f"User-Agent: {_CURL_UA}",
+        "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "-H", "Accept-Language: en-GB,en;q=0.9",
+        url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"curl failed ({proc.returncode}): {stderr.decode()}")
+    return stdout.decode("utf-8", errors="replace")
 
 
 def _parse_date(s: str) -> Optional[date]:
@@ -45,21 +70,6 @@ class ScillyIslesScraper(BaseScraper):
     def __init__(self, config: CouncilConfig):
         super().__init__(config)
         self._base = config.base_url.rstrip("/")
-        self._client = httpx.AsyncClient(
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-GB,en;q=0.9",
-            },
-            follow_redirects=True,
-            timeout=30,
-            http1=True,
-            http2=False,
-        )
 
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         summaries = []
@@ -68,9 +78,8 @@ class ScillyIslesScraper(BaseScraper):
 
         while page < max_pages:
             url = f"{self._base}{LIST_PATH}" if page == 0 else f"{self._base}{LIST_PATH}?page={page}"
-            resp = await self._client.get(url)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            html = await _curl_get(url)
+            soup = BeautifulSoup(html, "html.parser")
 
             table = soup.find("table")
             if not table:
@@ -93,6 +102,7 @@ class ScillyIslesScraper(BaseScraper):
                 if not link:
                     continue
                 ref = cells[0].get_text(strip=True)
+                ref = re.sub(r"^Planning application:\s*", "", ref)
                 href = link["href"]
                 if not href.startswith("http"):
                     href = f"{self._base}{href}"
@@ -107,9 +117,8 @@ class ScillyIslesScraper(BaseScraper):
         return summaries
 
     async def fetch_detail(self, application: ApplicationSummary) -> ApplicationDetail:
-        resp = await self._client.get(application.url)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = await _curl_get(application.url)
+        soup = BeautifulSoup(html, "html.parser")
 
         reference = _field_text(soup, "field-name-field-planning-app-num") or application.uid
         address = _field_text(soup, "field-name-field-site-address")
