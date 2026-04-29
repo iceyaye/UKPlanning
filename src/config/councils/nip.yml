@@ -5,5 +5,5 @@ base_url: https://infrastructure.planninginspectorate.gov.uk/projects/register-o
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-archived: true
-# disabled_reason: ARCHIVED - confirmed inaccessible
+status: DELETED
+# Not a council — National Infrastructure Planning Inspectorate

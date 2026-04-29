@@ -5,4 +5,5 @@ base_url: https://publicaccess.cravendc.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# Council merged into North Yorkshire 2023 — portal accessible but no new applications
+status: DELETED
+# Abolished April 2023 — merged into North Yorkshire Council

@@ -5,4 +5,5 @@ base_url: https://planning.cumbria.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# Council abolished 2023 — portal redirects to cumberland.gov.uk
+status: DELETED
+# Abolished April 2023 — split into Cumberland and Westmorland & Furness

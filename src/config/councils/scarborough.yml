@@ -5,3 +5,5 @@ base_url: https://planning.scarborough.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+status: DELETED
+# Abolished April 2023 — merged into North Yorkshire Council

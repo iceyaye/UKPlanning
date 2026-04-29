@@ -5,5 +5,5 @@ base_url: ''
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-archived: true
-# disabled_reason: ARCHIVED - confirmed inaccessible
+status: DELETED
+# Planning powers transferred to London boroughs December 2024

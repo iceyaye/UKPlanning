@@ -5,3 +5,5 @@ base_url: https://publicaccess.corby.gov.uk/publicaccess
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+status: DELETED
+# Abolished April 2021 — merged into North Northamptonshire Council
