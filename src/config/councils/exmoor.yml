@@ -5,4 +5,4 @@ base_url: https://exmoor.planning-register.co.uk
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# reCAPTCHA on search — no date-range endpoint available
+# /Search/Standard returns 404, reCAPTCHA on search form

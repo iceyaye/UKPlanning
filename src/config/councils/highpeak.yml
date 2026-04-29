@@ -1,8 +1,7 @@
 name: HighPeak
 authority_code: highpeak
-platform: idox
-base_url: https://planning.highpeak.gov.uk/online-applications
+platform: appsearchserv
+base_url: http://planning.highpeak.gov.uk/portal/servlets/ApplicationSearchServlet
 schedule: 0 3 * * *
 requires_js: false
-enabled: false
-# disabled_reason: Server genuinely down - connection refused. Confirmed via Playwright.
+enabled: true

@@ -59,6 +59,9 @@ COUNCIL_URLS = {
     "northamptonshire": "https://wnc.planning-register.co.uk",
     "worcestershire": "https://worcestershire.planning-register.co.uk",
     "hampshire": "https://planning.hants.gov.uk",
+    "northwarwickshire": "https://planning.northwarks.gov.uk",
+    "southoxfordshire": "https://southoxfordshire.planning-register.co.uk",
+    "whitehorse": "https://valeofwhitehorse.planning-register.co.uk",
 }
 
 

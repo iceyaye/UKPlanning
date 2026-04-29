@@ -5,4 +5,4 @@ base_url: https://plantech.centralbedfordshire.gov.uk/PLANTECH/DCWebPages/acolne
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# disabled_reason: Acolnet portal decommissioned (404). Info page only. Confirmed via Playwright.
+# Acolnet portal alive but scraper returns 0 results — needs debugging

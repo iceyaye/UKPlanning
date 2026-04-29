@@ -5,4 +5,4 @@ base_url: https://www.kirklees.gov.uk/beta/planning-applications/search-for-plan
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# disabled_reason: ASP.NET search form - postback doesn't trigger from automation. Confirmed via Playwright.
+# Scraper exists but returns 0 results — needs debugging

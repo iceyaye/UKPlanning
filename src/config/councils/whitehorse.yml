@@ -1,8 +1,8 @@
 name: WhiteHorse
 authority_code: whitehorse
-platform: whitehorse
-base_url: https://data.whitehorsedc.gov.uk/java/support/Main.jsp
+platform: planning_register
+base_url: https://valeofwhitehorse.planning-register.co.uk
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# disabled_reason: CCM/JSP - returns 403 Forbidden even from Playwright.
+# Migrated to planning-register.co.uk but search results require JavaScript rendering

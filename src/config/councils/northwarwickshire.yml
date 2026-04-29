@@ -1,8 +1,8 @@
 name: NorthWarwickshire
 authority_code: northwarwickshire
-platform: idox
-base_url: https://planning.northwarks.gov.uk/online-applications
+platform: planning_register
+base_url: https://planning.northwarks.gov.uk
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
-# reCAPTCHA on search — no date-range endpoint available
+# /Search/Standard returns 404, reCAPTCHA on search form
