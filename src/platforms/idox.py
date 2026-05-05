@@ -4,12 +4,16 @@ Idox is the dominant planning portal platform, used by ~250 UK councils.
 This module defines the default selectors and the scraper class.
 """
 
+import logging
 from datetime import date, timedelta
 from urllib.parse import urljoin
 
+import httpx
 from bs4 import BeautifulSoup
 
 from src.core.browser import HttpClient
+
+logger = logging.getLogger(__name__)
 from src.core.config import CouncilConfig
 from src.core.parser import PageParser
 from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper, ScrapeResult
@@ -190,7 +194,20 @@ class IdoxScraper(BaseScraper):
             if next_el is None:
                 break
             next_url = urljoin(self.config.base_url, next_el["href"])
-            html = await self._client.get_html(next_url)
+            try:
+                html = await self._client.get_html(next_url)
+            except httpx.HTTPStatusError as e:
+                # Site rate-limited us deep in pagination — return what we have
+                # rather than losing the whole search. The next scheduled run
+                # picks up where we left off via the per-app upsert.
+                if e.response.status_code in (429, 503):
+                    logger.warning(
+                        "%s: pagination stopped at %d apps due to %d on %s",
+                        self.config.authority_code, len(applications),
+                        e.response.status_code, next_url,
+                    )
+                    break
+                raise
 
         return applications
 

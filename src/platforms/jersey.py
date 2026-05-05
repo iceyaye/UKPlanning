@@ -50,7 +50,7 @@ class JerseyScraper(BaseScraper):
                 )
                 page = await ctx.new_page()
 
-                await page.goto(SEARCH_URL, timeout=30000)
+                await page.goto(SEARCH_URL, timeout=90000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3000)
 
                 # Fill date dropdowns
