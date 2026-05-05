@@ -45,7 +45,10 @@ class SwiftLGScraper(BaseScraper):
     def __init__(self, config, detail_selectors=None):
         super().__init__(config)
         self._parser = PageParser()
-        self._client = HttpClient(timeout=30, rate_limit_delay=config.rate_limit_delay)
+        # SwiftLG sites (especially Walsall) can take 25–30s to return search
+        # results — their Oracle backend is slow. The default 30s httpx
+        # timeout was hitting ReadTimeout intermittently.
+        self._client = HttpClient(timeout=90, rate_limit_delay=config.rate_limit_delay)
         self._search_selectors = {**SWIFTLG_SEARCH_SELECTORS}
         self._detail_selectors = detail_selectors or {**SWIFTLG_SPAN_SELECTORS}
         if config.selectors:
