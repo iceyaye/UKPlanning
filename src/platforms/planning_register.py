@@ -509,6 +509,22 @@ class PlanningRegisterScraper(BaseScraper):
                     detail["description"] = h3.get_text().strip()
 
         # Strategy 3: fallback regex on page text (older pages)
+        # Sites whose detail-page is laid out vertically (one field per line)
+        # break this strategy because regexes like
+        # `r"Location\s+(.+?)(?=\n|Proposal)"` capture the *label* on the next
+        # line ("Address") as the value. Skip the regex if its match looks
+        # like a known field label.
+        _label_blacklist = {
+            "address", "site address", "location address", "location",
+            "proposal", "description", "reference", "application number",
+            "application type", "status", "decision", "ward", "parish",
+            "applicant", "applicant name", "case officer", "officer",
+            "received", "valid", "valid date", "received date",
+        }
+
+        def _is_label_like(value: str) -> bool:
+            return value.strip().lower() in _label_blacklist
+
         if not detail.get("address") or not detail.get("description"):
             page_text = soup.get_text()
             field_patterns = {
@@ -528,7 +544,9 @@ class PlanningRegisterScraper(BaseScraper):
                 if not detail.get(field):
                     match = re.search(pattern, page_text)
                     if match:
-                        detail[field] = match.group(1).strip()
+                        captured = match.group(1).strip()
+                        if not _is_label_like(captured):
+                            detail[field] = captured
 
         return ApplicationDetail(
             reference=detail.get("reference", application.uid),
