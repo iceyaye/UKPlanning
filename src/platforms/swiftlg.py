@@ -170,10 +170,15 @@ class SwiftLGScraper(BaseScraper):
         links = self._parser.extract_list(html, self._search_selectors["result_links"], attr="href")
         uids = self._parser.extract_list(html, self._search_selectors["result_uids"])
         results = []
+        # urljoin needs a trailing slash on the base, otherwise the last path
+        # segment (e.g. `/swift/apas/run`) is treated as a filename and the
+        # relative `WPHAPPDETAIL.DisplayUrl?...` href replaces it instead of
+        # appending — dropping `run/` from every detail URL.
+        base = self.config.base_url.rstrip("/") + "/"
         for i, link in enumerate(links):
             uid = uids[i] if i < len(uids) else None
             if uid:
-                results.append(ApplicationSummary(uid=uid, url=urljoin(self.config.base_url, link)))
+                results.append(ApplicationSummary(uid=uid, url=urljoin(base, link)))
         return results
 
     async def fetch_detail(self, application):
