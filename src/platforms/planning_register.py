@@ -441,7 +441,7 @@ class PlanningRegisterScraper(BaseScraper):
             "description": "",
         }
 
-        # Strategy 1: extract from <dl>/<dt>/<dd> pairs (newer pages)
+        # Strategy 1a: extract from <dl>/<dt>/<dd> pairs (newer pages)
         dt_dd_map = self._extract_dt_dd(soup)
         if dt_dd_map:
             detail["status"] = dt_dd_map.get("Status", "")
@@ -457,6 +457,31 @@ class PlanningRegisterScraper(BaseScraper):
             detail["date_validated"] = (
                 dt_dd_map.get("Valid Date", "")
                 or dt_dd_map.get("Validated Date", "")
+            )
+
+        # Strategy 1b: extract from `table.summaryTbl` two-column rows
+        # (NorthDevon and other sites with the same Aspire/CSW template).
+        summary_map = self._extract_summary_tables(soup)
+        if summary_map:
+            detail["reference"] = summary_map.get("Application Number") or detail.get("reference") or application.uid
+            detail["address"] = summary_map.get("Location Address") or summary_map.get("Site Address") or detail.get("address") or ""
+            detail["description"] = summary_map.get("Proposal") or summary_map.get("Description") or detail.get("description") or ""
+            detail["status"] = detail.get("status") or summary_map.get("Status", "")
+            detail["application_type"] = detail.get("application_type") or summary_map.get("Application Type")
+            detail["case_officer"] = detail.get("case_officer") or summary_map.get("Case Officer")
+            detail["applicant_name"] = detail.get("applicant_name") or summary_map.get("Applicant Name")
+            detail["ward"] = detail.get("ward") or summary_map.get("Ward")
+            detail["parish"] = detail.get("parish") or summary_map.get("Parish")
+            detail["decision"] = detail.get("decision") or summary_map.get("Decision")
+            detail["date_received"] = (
+                detail.get("date_received")
+                or summary_map.get("Application Received Date")
+                or summary_map.get("Received Date")
+            )
+            detail["date_validated"] = (
+                detail.get("date_validated")
+                or summary_map.get("Application Valid Date")
+                or summary_map.get("Valid Date")
             )
 
         # Strategy 2: extract ref/address/description from headings
@@ -532,6 +557,27 @@ class PlanningRegisterScraper(BaseScraper):
                     continue
                 label = dt.get_text().strip()
                 value = dd.get_text().strip()
+                if label and value and value != "N/A":
+                    result[label] = value
+        return result
+
+    @staticmethod
+    def _extract_summary_tables(soup) -> dict:
+        """Extract label/value pairs from <table class="summaryTbl"> two-column rows.
+
+        NorthDevon's Aspire/CSW template renders detail data as `<table>` rows
+        of `<td>Label</td><td>Value</td>`. Each table is a section
+        (Summary / Important Dates / Further Information). Rows whose first
+        cell has `colspan=2` are section headers, not data.
+        """
+        result = {}
+        for table in soup.select("table.summaryTbl, table.summary-table"):
+            for tr in table.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) != 2:
+                    continue
+                label = tds[0].get_text(" ", strip=True).rstrip(":").strip()
+                value = tds[1].get_text(" ", strip=True)
                 if label and value and value != "N/A":
                     result[label] = value
         return result
