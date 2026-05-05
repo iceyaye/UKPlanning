@@ -104,12 +104,62 @@ class NorthgateAssureScraper(BaseScraper):
         self._session_ready = False
 
     async def _ensure_session(self) -> None:
-        """GET the search page to establish ASP.NET session cookie."""
+        """GET the search page to establish ASP.NET session cookie and cache
+        the form fields the server requires (ApplicationStatutes[N], etc)."""
         if self._session_ready:
             return
         resp = await self._client.get(self._base_url + SEARCH_PAGE)
         resp.raise_for_status()
+        self._base_form = self._extract_form_fields(resp.text)
         self._session_ready = True
+
+    @staticmethod
+    def _extract_form_fields(html: str) -> Dict[str, str]:
+        """Pull every input/select default value from the live search form.
+
+        The Northgate Assure search server rejects POSTs (500) when fields
+        like ApplicationStatutes[0..N].Selected are missing — they're built
+        dynamically from the council's status configuration so we can't hard-
+        code them.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.find("form")
+        if not form:
+            return {}
+        fields: Dict[str, str] = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name", "")
+            if not name:
+                continue
+            input_type = (inp.get("type") or "").lower()
+            value = inp.get("value", "")
+            if input_type == "checkbox":
+                # ASP.NET emits two inputs per checkbox: visible (type=checkbox)
+                # and a hidden "false". Honour `checked` on the visible one;
+                # the hidden one keeps the false so don't overwrite if checked.
+                if inp.has_attr("checked"):
+                    fields[name] = value if value else "true"
+                elif name not in fields:
+                    fields[name] = value or "false"
+            elif input_type == "radio":
+                if inp.has_attr("checked"):
+                    fields[name] = value
+                elif name not in fields:
+                    fields.setdefault(name, "")
+            else:
+                # text, hidden, submit etc.
+                fields[name] = value
+        for sel in form.find_all("select"):
+            name = sel.get("name", "")
+            if not name:
+                continue
+            chosen = sel.find("option", selected=True) or sel.find("option")
+            fields[name] = chosen.get("value", "") if chosen else ""
+        for ta in form.find_all("textarea"):
+            name = ta.get("name", "")
+            if name:
+                fields[name] = ta.get_text() or ""
+        return fields
 
     def _ajax_headers(self) -> Dict[str, str]:
         return {
@@ -126,31 +176,22 @@ class NorthgateAssureScraper(BaseScraper):
         to_date: Optional[date] = None,
         any_status: bool = True,
     ) -> Dict[str, str]:
-        """Build the form data matching the Northgate Assure search form."""
-        form = {
-            "SearchFor": "PlanningApplications",
-            "SearchInput": search_input,
-            "DisplayTPOs": "False",
-            "DisplayWorksToTrees": "False",
-            "DisplayEnforcements": "False",
-            "DisplayMapSearch": "False",
-            "AnyStatus": "true" if any_status else "false",
-            "StatusOptions": status_option,
-            "SortOptions": "SortedByMostRecent",
-            "SearchResultsJson": "",
-            "SelectedManagementArea": "",
-            "SelectedManagementAreaDescription": "",
-            "DivisionalOptionsForWard": "",
-            "DivisionalOptionsForParish": "",
-            "DivisionalOptionsForConstituency": "",
-            "DivisionalOptionsWardDescription": "",
-            "DivisionalOptionsParishDescription": "",
-            "DivisionalOptionsConstituencyDescription": "",
-            "IsWeeklyListSearch": "",
-            "IsMonthlyListSearch": "",
-            "IsAdvanceSearch": "",
-            "SubmitWeeklyMonthlySearch": "",
-        }
+        """Build form data starting from the live form fields (which include
+        ApplicationStatutes[N], status checkboxes, etc) and overriding with
+        the search-specific values. Falls back to the legacy hard-coded set
+        if _ensure_session hasn't run yet."""
+        form: Dict[str, str] = dict(getattr(self, "_base_form", {}) or {})
+        # Sensible defaults (only set when not present in the scraped form)
+        form.setdefault("SearchFor", "PlanningApplications")
+        form.setdefault("DisplayTPOs", "False")
+        form.setdefault("DisplayWorksToTrees", "False")
+        form.setdefault("DisplayEnforcements", "False")
+        form.setdefault("DisplayMapSearch", "False")
+        form.setdefault("SortOptions", "SortedByMostRecent")
+        # Search-specific overrides
+        form["SearchInput"] = search_input
+        form["AnyStatus"] = "true" if any_status else "false"
+        form["StatusOptions"] = status_option
         if from_date and to_date:
             form["StatusOptions"] = "CustomDateRange"
             form["FromDate"] = from_date.strftime(self.DATE_FORMAT)
@@ -160,21 +201,83 @@ class NorthgateAssureScraper(BaseScraper):
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search for planning applications in a date range.
 
-        Strategy: POST the search form with a wildcard keyword and custom date
-        range. The Northgate Assure basic search requires at least 3 chars in
-        SearchInput. We use a common postcode prefix or '*' character. If the
-        basic search fails (server requires real keywords), we fall back to the
-        weekly/monthly list approach.
+        Northgate Assure has no "list everything in date range" endpoint, so
+        we union three strategies:
+         1. Keyword search (postcode prefixes + reference fragments) with
+            custom date range — basic search requires ≥3 chars SearchInput.
+         2. Monthly list for each month overlapping the range, both
+            ValidatedThisMonth and DecidedThisMonth statuses.
+         3. Weekly list as a final fallback if both above are empty.
         """
         await self._ensure_session()
 
-        # Try basic search with date range -- use a broad keyword
-        summaries = await self._search_by_date_range(date_from, date_to)
-        if summaries:
-            return summaries
+        seen: set = set()
+        merged: List[ApplicationSummary] = []
 
-        # Fallback: use weekly/monthly list endpoint if date range is short
+        for src in (
+            await self._search_by_date_range(date_from, date_to),
+            await self._search_monthly_list(date_from, date_to),
+        ):
+            for s in src:
+                if s.uid in seen:
+                    continue
+                seen.add(s.uid)
+                merged.append(s)
+
+        if merged:
+            return merged
+
+        # Last-resort fallback if nothing turned up
         return await self._search_weekly_monthly(date_from, date_to)
+
+    async def _search_monthly_list(
+        self, date_from: date, date_to: date
+    ) -> List[ApplicationSummary]:
+        """Use the Monthly list view for each month in the range.
+
+        The form requires `SelectedMonth` (e.g. "April 2026") plus
+        `MonthlyListStatus` set to ValidatedThisMonth or DecidedThisMonth.
+        """
+        results: List[ApplicationSummary] = []
+        seen: set = set()
+
+        # Build month labels covering [date_from, date_to]
+        months: List[str] = []
+        cur = date(date_from.year, date_from.month, 1)
+        end = date(date_to.year, date_to.month, 1)
+        while cur <= end:
+            months.append(cur.strftime("%B %Y"))
+            year, month = cur.year, cur.month
+            if month == 12:
+                cur = date(year + 1, 1, 1)
+            else:
+                cur = date(year, month + 1, 1)
+
+        for month_label in months:
+            for status in ("ValidatedThisMonth", "DecidedThisMonth"):
+                form = dict(self._base_form)
+                form["SearchInput"] = ""
+                form["IsMonthlyListSearch"] = "true"
+                form["IsWeeklyListSearch"] = "false"
+                form["SelectedMonth"] = month_label
+                form["MonthlyListStatus"] = status
+                form["StatusOptions"] = "ReceivedAnyTime"
+                try:
+                    resp = await self._client.post(
+                        self._base_url + SEARCH_RESULTS,
+                        data=form,
+                        headers=self._ajax_headers(),
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    for s in self._parse_search_results(resp.text):
+                        if s.uid in seen:
+                            continue
+                        seen.add(s.uid)
+                        results.append(s)
+                except httpx.HTTPError:
+                    continue
+        return results
 
     async def _search_by_date_range(
         self, date_from: date, date_to: date
