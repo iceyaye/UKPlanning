@@ -282,57 +282,98 @@ class SalesforceDirectScraper(BaseScraper):
         return self._extract_records(result)
 
     def _record_to_detail(self, record: dict) -> Optional[ApplicationDetail]:
-        """Convert a Salesforce record to ApplicationDetail."""
+        """Convert a Salesforce record to ApplicationDetail.
+
+        Different councils use different managed-package prefixes:
+        - `arcusbuiltenv__` (Anglesey, Carmarthenshire, Wiltshire)
+        - `arcusbuilt__` (Eastleigh — different package, no `env`)
+        Plus per-council custom fields like `Portal_Site_Address__c`.
+        """
         app_id = record.get("Id", "")
         if not app_id:
             return None
 
-        received = _parse_date(
-            record.get("arcusbuiltenv__Received_Date__c")
-            or record.get("arcusbuiltenv__Valid_Date__c")
-            or record.get("Received_Date__c")
-            or record.get("Valid_Date__c")
-        )
+        def first(*keys):
+            for k in keys:
+                v = record.get(k)
+                if v:
+                    return v
+            return None
 
-        address = (
-            record.get("arcusbuiltenv__Site_Address__c")
-            or record.get("Hidden_PR_Site_address__c")
-            or record.get("Site_Address__c")
-            or record.get("BROM_Site_Address__c")
-            or ""
-        )
+        # Some address values live inside related-object dicts (Location__r)
+        location_r = record.get("arcusbuilt__Location__r") or record.get("arcusbuiltenv__Location__r") or {}
+        if isinstance(location_r, dict):
+            related_address = (
+                location_r.get("arcusgazetteer__Address__c")
+                or location_r.get("Address__c")
+            )
+        else:
+            related_address = None
 
-        description = (
-            record.get("arcusbuiltenv__Proposal__c")
-            or record.get("Proposal__c")
-            or ""
-        )
+        officer_r = record.get("arcusbuilt__PlanningOfficer__r") or record.get("arcusbuiltenv__PlanningOfficer__r") or {}
+        case_officer = officer_r.get("Name") if isinstance(officer_r, dict) else None
 
-        reference = record.get("Name", "")
+        record_type = record.get("RecordType") or {}
+        application_type = record_type.get("Name") if isinstance(record_type, dict) else None
+
+        received = _parse_date(first(
+            "arcusbuilt__ReceivedDate__c",
+            "arcusbuiltenv__Received_Date__c",
+            "arcusbuiltenv__Valid_Date__c",
+            "Received_Date__c",
+            "Valid_Date__c",
+        ))
+        validated = _parse_date(first(
+            "arcusbuilt__Validation_Date__c",
+            "arcusbuilt__Registration_Complete_Date__c",
+            "arcusbuiltenv__Validation_Date__c",
+        ))
+
+        address = first(
+            "Portal_Site_Address__c",
+            "arcusbuiltenv__Site_Address__c",
+            "Hidden_PR_Site_address__c",
+            "Site_Address__c",
+            "BROM_Site_Address__c",
+        ) or related_address or ""
+
+        description = first(
+            "arcusbuilt__Proposal__c",
+            "arcusbuiltenv__Proposal__c",
+            "Proposal__c",
+        ) or ""
 
         return ApplicationDetail(
-            reference=reference,
+            reference=record.get("Name", ""),
             address=address,
             description=description,
             url=f"{self._base_url}{self._path_prefix}/s/planning-application/{app_id}",
-            application_type=(
-                record.get("arcusbuiltenv__Type__c")
-                or record.get("Type__c")
+            application_type=application_type or first(
+                "arcusbuiltenv__Type__c",
+                "Type__c",
             ),
-            status=(
-                record.get("arcusbuiltenv__Status__c")
-                or record.get("Status__c")
+            status=first(
+                "arcusbuilt__Status__c",
+                "arcusbuiltenv__Status__c",
+                "Status__c",
             ),
-            decision=(
-                record.get("arcusbuiltenv__Current_Decision__c")
-                or record.get("Current_Decision__c")
+            decision=first(
+                "arcusbuilt__Last_Decision__c",
+                "arcusbuiltenv__Current_Decision__c",
+                "Current_Decision__c",
             ),
             date_received=received,
-            date_validated=None,
-            ward=None,
-            parish=None,
+            date_validated=validated,
+            ward=first(
+                "arcusbuilt__Wards__c",
+                "arcusbuiltenv__Wards__c",
+            ),
+            parish=first(
+                "arcusbuilt__Parishes__c",
+                "arcusbuiltenv__Parishes__c",
+            ),
             applicant_name=None,
-            case_officer=None,
+            case_officer=case_officer,
             raw_data=record,
         )
 
