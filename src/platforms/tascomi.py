@@ -1,20 +1,24 @@
-"""Tascomi platform scraper (Dartmoor, Barking/Be First).
+"""Tascomi platform scraper (Dartmoor, Stoke, Gloucestershire, Denbighshire,
+and others).
 
-Tascomi portals serve weekly lists at fa=getReceivedWeeklyList which contain
-application data in HTML tables. Detail pages return 202 async, so we extract
-all data from the weekly list tables instead.
+Tascomi portals serve a `getReceivedWeeklyList` form that requires a `week`
+parameter (Monday of an ISO week, formatted as YYYY-MM-DD). A bare GET shows
+either the most-recent week's apps (some councils) or nothing (most councils).
+To cover a date range we enumerate every ISO-week-starting Monday between
+`date_from` and `date_to` and POST each, accumulating the resulting rows.
 
-For search by date range, we POST to the search form with date parameters.
+Detail pages return HTTP 202 (async render) so we extract all fields from
+the weekly-list table directly.
 """
 import re
-from datetime import date, datetime
-from typing import List, Optional
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Optional
 
 import httpx
 from bs4 import BeautifulSoup
 
 from src.core.config import CouncilConfig
-from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
+from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper, ScrapeResult
 
 COUNCIL_URLS = {
     "dartmoor": "https://dartmoor-online.tascomi.com",
@@ -50,51 +54,93 @@ class TascomiScraper(BaseScraper):
             timeout=30,
         )
 
-    async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
-        """Get applications from the weekly received list."""
-        url = f"{self._base_url}/planning/index.html?fa=getReceivedWeeklyList"
-        resp = await self._client.get(url)
+    @staticmethod
+    def _iso_week_mondays(date_from: date, date_to: date) -> List[date]:
+        """Return every Monday on/before each ISO week that intersects
+        [date_from, date_to]. Tascomi's weekpicker keys lists by the Monday
+        of an ISO week, so we POST one request per intersecting week."""
+        first_monday = date_from - timedelta(days=date_from.weekday())
+        last_monday = date_to - timedelta(days=date_to.weekday())
+        mondays = []
+        cur = first_monday
+        while cur <= last_monday:
+            mondays.append(cur)
+            cur += timedelta(days=7)
+        return mondays
+
+    async def _fetch_week(self, week_monday: date) -> str:
+        """POST the weekly-list form for the given Monday and return HTML."""
+        url = f"{self._base_url}/planning/index.html"
+        resp = await self._client.post(
+            url,
+            data={
+                "fa": "getReceivedWeeklyList",
+                "week": week_monday.strftime("%Y-%m-%d"),
+            },
+        )
         resp.raise_for_status()
+        return resp.text
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        summaries = []
-
-        for link in soup.find_all("a", href=re.compile(r"getApplication.*id=\d+")):
-            href = link.get("href", "")
-            id_match = re.search(r"id=(\d+)", href)
-            if id_match:
-                app_id = id_match.group(1)
-                summaries.append(ApplicationSummary(
-                    uid=app_id,
-                    url=f"{self._base_url}{href}" if href.startswith("/") else href,
-                ))
-
-        return summaries
-
-    async def fetch_detail(self, application: ApplicationSummary) -> ApplicationDetail:
-        """Extract detail from the weekly list table row (detail pages return 202)."""
-        # Re-fetch the weekly list and find this application's row
-        url = f"{self._base_url}/planning/index.html?fa=getReceivedWeeklyList"
-        resp = await self._client.get(url)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Find the row containing this application's link
+    def _parse_week_rows(self, html: str) -> List[ApplicationDetail]:
+        """Extract every application row from a weekly-list HTML page."""
+        soup = BeautifulSoup(html, "html.parser")
+        details: List[ApplicationDetail] = []
         for row in soup.find_all("tr"):
-            link = row.find("a", href=re.compile(rf"id={application.uid}"))
+            cells = row.find_all("td")
+            if len(cells) < 5:
+                continue
+            link = row.find("a", href=re.compile(r"getApplication.*id=\d+"))
             if not link:
                 continue
+            href = link.get("href", "")
+            app_url = f"{self._base_url}{href}" if href.startswith("/") else href
+            details.append(ApplicationDetail(
+                reference=cells[0].get_text(strip=True),
+                address=cells[1].get_text(strip=True),
+                description=cells[2].get_text(strip=True),
+                url=app_url,
+                ward=cells[3].get_text(strip=True) or None,
+                parish=cells[4].get_text(strip=True) or None,
+            ))
+        return details
 
-            cells = row.find_all("td")
-            if len(cells) >= 5:
-                return ApplicationDetail(
-                    reference=cells[0].get_text(strip=True),
-                    address=cells[1].get_text(strip=True),
-                    description=cells[2].get_text(strip=True),
-                    url=application.url,
-                    ward=cells[3].get_text(strip=True),
-                    parish=cells[4].get_text(strip=True),
-                )
+    async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
+        """Walk every intersecting ISO week and accumulate application IDs."""
+        seen_ids: Dict[str, str] = {}
+        for monday in self._iso_week_mondays(date_from, date_to):
+            try:
+                html = await self._fetch_week(monday)
+            except httpx.HTTPError:
+                continue
+            for d in self._parse_week_rows(html):
+                # Use the numeric id from the URL as uid since references can
+                # differ in formatting across councils
+                m = re.search(r"id=(\d+)", d.url or "")
+                uid = m.group(1) if m else d.reference
+                if uid and uid not in seen_ids:
+                    seen_ids[uid] = d.url
+        return [ApplicationSummary(uid=u, url=url) for u, url in seen_ids.items()]
 
+    async def fetch_detail(self, application: ApplicationSummary) -> ApplicationDetail:
+        """Re-walk the relevant weekly list and return the matched row's data.
+
+        scrape() does this in one pass, so this path is only hit when the
+        worker uses the legacy gather_ids+fetch_detail pipeline.
+        """
+        # Use the Monday of "today" as a starting point and walk back a few
+        # weeks looking for the application — most apps appear in the week
+        # they were received, so a 6-week window is plenty.
+        today_monday = date.today() - timedelta(days=date.today().weekday())
+        for offset in range(0, 6):
+            monday = today_monday - timedelta(days=7 * offset)
+            try:
+                html = await self._fetch_week(monday)
+            except httpx.HTTPError:
+                continue
+            for d in self._parse_week_rows(html):
+                m = re.search(r"id=(\d+)", d.url or "")
+                if m and m.group(1) == application.uid:
+                    return d
         return ApplicationDetail(
             reference=application.uid,
             address="",
@@ -102,35 +148,23 @@ class TascomiScraper(BaseScraper):
             url=application.url,
         )
 
-    async def scrape(self, date_from: date, date_to: date):
-        """Override to extract all data from weekly list in one pass."""
-        from src.core.scraper import ScrapeResult
+    async def scrape(self, date_from: date, date_to: date) -> ScrapeResult:
+        """Single-pass scrape: walk every intersecting ISO week and extract
+        all rows. Faster than gather_ids+fetch_detail because we only fetch
+        each weekly list once."""
         try:
-            url = f"{self._base_url}/planning/index.html?fa=getReceivedWeeklyList"
-            resp = await self._client.get(url)
-            resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            details = []
-
-            for row in soup.find_all("tr"):
-                cells = row.find_all("td")
-                if len(cells) < 5:
+            seen: set = set()
+            details: List[ApplicationDetail] = []
+            for monday in self._iso_week_mondays(date_from, date_to):
+                try:
+                    html = await self._fetch_week(monday)
+                except httpx.HTTPError:
                     continue
-
-                link = row.find("a", href=re.compile(r"getApplication.*id=\d+"))
-                href = link.get("href", "") if link else ""
-                app_url = f"{self._base_url}{href}" if href.startswith("/") else href
-
-                details.append(ApplicationDetail(
-                    reference=cells[0].get_text(strip=True),
-                    address=cells[1].get_text(strip=True),
-                    description=cells[2].get_text(strip=True),
-                    url=app_url,
-                    ward=cells[3].get_text(strip=True),
-                    parish=cells[4].get_text(strip=True),
-                ))
-
+                for d in self._parse_week_rows(html):
+                    if d.reference in seen:
+                        continue
+                    seen.add(d.reference)
+                    details.append(d)
             return ScrapeResult(date_from=date_from, date_to=date_to, applications=details)
         except Exception as e:
             return ScrapeResult(date_from=date_from, date_to=date_to, error=str(e))
