@@ -94,7 +94,7 @@ class PlanningExplorerScraper(BaseScraper):
         results_base = str(response.url)
         applications = []
         while True:
-            page_apps = self._parse_results(html)
+            page_apps = self._parse_results(html, results_base)
             applications.extend(page_apps)
             next_el = self._parser.select_one(html, self._search_selectors["next_page"])
             if next_el is None:
@@ -105,14 +105,14 @@ class PlanningExplorerScraper(BaseScraper):
             results_base = str(response.url)
         return applications
 
-    def _parse_results(self, html):
+    def _parse_results(self, html, base_url):
         links = self._parser.extract_list(html, self._search_selectors["result_links"], attr="href")
         uids = self._parser.extract_list(html, self._search_selectors["result_uids"])
         results = []
         for i, link in enumerate(links):
             uid = uids[i] if i < len(uids) else None
             if uid:
-                results.append(ApplicationSummary(uid=uid, url=urljoin(self.config.base_url, link)))
+                results.append(ApplicationSummary(uid=uid, url=urljoin(base_url, link)))
         return results
 
     async def fetch_detail(self, application):
@@ -121,7 +121,7 @@ class PlanningExplorerScraper(BaseScraper):
         dates_data = {}
         dates_el = self._parser.select_one(detail_html, self._search_selectors["dates_link"])
         if dates_el:
-            dates_url = urljoin(self.config.base_url, dates_el.get("href", ""))
+            dates_url = urljoin(application.url, dates_el.get("href", ""))
             dates_html = await self._client.get_html(dates_url)
             dates_data = self._extract_li_fields(dates_html, self._dates_selectors)
         raw = {k: v for d in (detail_data, dates_data) for k, v in d.items() if v is not None}

@@ -4,4 +4,5 @@ platform: idox
 base_url: https://planningapps.brighton-hove.gov.uk/online-applications
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+# disabled_reason: Incapsula WAF JS challenge — initial GET returns 212-byte Incapsula bootloader (no idox HTML). Needs full browser to clear challenge.

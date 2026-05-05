@@ -4,4 +4,5 @@ platform: boston
 base_url: https://www.boston.gov.uk/planningapplicationsearch
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+# disabled_reason: Cloudflare bot challenge re-triggers on form POST even after initial clearance. Headless Playwright detected and re-challenged; non-headless browser required.

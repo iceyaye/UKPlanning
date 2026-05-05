@@ -99,10 +99,15 @@ class IdoxScraper(BaseScraper):
         return response
 
     async def gather_ids(self, date_from: date, date_to: date) -> list[ApplicationSummary]:
-        """Search Idox portal for applications in date range, handling pagination."""
+        """Search Idox portal for applications in date range, handling pagination
+        and recursively splitting on 'Too many results found' errors.
+
+        Some Idox installs (e.g. Hammersmith) only expose applicationValidated;
+        others use applicationReceived. We try the configured field first, then
+        fall back to applicationValidated, then applicationDecision."""
         search_url = self.config.base_url + self.SEARCH_PATH
 
-        # Load search page to get CSRF token, session cookies, and real base URL (after redirects)
+        # Load search page once: get CSRF token, session cookies, real base URL (after redirects)
         response = await self._client.get(search_url)
         response = await self._accept_disclaimer(response)
         if "Disclaimer" in str(response.url):
@@ -110,23 +115,71 @@ class IdoxScraper(BaseScraper):
         search_html = response.text
         real_base = str(response.url).split("/search.do")[0]
         csrf_token = self._extract_csrf(search_html)
+        results_url = real_base + self.RESULTS_PATH
+        search_page_url = str(response.url)
 
-        # Build form data with CSRF token
+        # Build list of date-field candidates: configured first, then sensible fallbacks
+        date_fields = [(self.DATE_FROM_FIELD, self.DATE_TO_FIELD)]
+        for f, t in [
+            ("date(applicationValidatedStart)", "date(applicationValidatedEnd)"),
+            ("date(applicationDecisionStart)", "date(applicationDecisionEnd)"),
+        ]:
+            if (f, t) not in date_fields and f in search_html:
+                date_fields.append((f, t))
+
+        for from_field, to_field in date_fields:
+            seen = set()
+            out = []
+            for app in await self._search_range(
+                date_from, date_to, csrf_token, results_url, search_page_url,
+                from_field=from_field, to_field=to_field, depth=0,
+            ):
+                if app.uid in seen:
+                    continue
+                seen.add(app.uid)
+                out.append(app)
+            if out:
+                return out
+        return []
+
+    async def _search_range(
+        self,
+        date_from: date,
+        date_to: date,
+        csrf_token: str,
+        results_url: str,
+        search_page_url: str,
+        depth: int,
+        from_field: str = None,
+        to_field: str = None,
+    ) -> list[ApplicationSummary]:
+        from_field = from_field or self.DATE_FROM_FIELD
+        to_field = to_field or self.DATE_TO_FIELD
         form_data = {
-            self.DATE_FROM_FIELD: date_from.strftime(self.DATE_FORMAT),
-            self.DATE_TO_FIELD: date_to.strftime(self.DATE_FORMAT),
+            from_field: date_from.strftime(self.DATE_FORMAT),
+            to_field: date_to.strftime(self.DATE_FORMAT),
             self.SEARCH_TYPE_FIELD: self.SEARCH_TYPE_VALUE,
         }
         if csrf_token:
             form_data["_csrf"] = csrf_token
 
-        results_url = real_base + self.RESULTS_PATH
-        search_page_url = str(response.url)
         response = await self._client.post(
             results_url, data=form_data,
             headers={"Referer": search_page_url},
         )
         html = response.text
+
+        # Idox returns "Too many results found" when the limit (often ~500) is
+        # exceeded. Bisect the date range and retry.
+        if "Too many results found" in html and date_from < date_to and depth < 6:
+            mid = date_from + (date_to - date_from) / 2
+            left = await self._search_range(date_from, mid, csrf_token, results_url, search_page_url, depth + 1, from_field, to_field)
+            right_from = mid + timedelta(days=1)
+            right = (
+                await self._search_range(right_from, date_to, csrf_token, results_url, search_page_url, depth + 1, from_field, to_field)
+                if right_from <= date_to else []
+            )
+            return left + right
 
         applications = []
         while True:

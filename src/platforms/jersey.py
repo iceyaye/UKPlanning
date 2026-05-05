@@ -79,23 +79,37 @@ class JerseyScraper(BaseScraper):
 
                 await page.wait_for_timeout(10000)
 
-                # Extract results
+                # Results live in <li><h2><a>REF</a></h2><dl><dt>Property:</dt><dd>ADDR</dd>...</dl></li>
                 data = await page.evaluate("""() => {
-                    const rows = document.querySelectorAll('table tr');
+                    const links = document.querySelectorAll('a[href*="PlanningApplicationDetail"]');
                     const results = [];
-                    for (const row of rows) {
-                        const cells = row.querySelectorAll('td');
-                        if (cells.length >= 3) {
-                            const ref = cells[0]?.innerText?.trim();
-                            if (ref && ref.match(/[A-Z]\\/\\d{4}/)) {
-                                results.push({
-                                    ref,
-                                    address: cells[1]?.innerText?.trim() || '',
-                                    proposal: cells[2]?.innerText?.trim() || '',
-                                    status: cells[3]?.innerText?.trim() || '',
-                                });
+                    const seen = new Set();
+                    for (const a of links) {
+                        const ref = a.innerText.trim();
+                        if (!ref || !ref.match(/[A-Z]+\\/\\d{4}/)) continue;
+                        if (seen.has(ref)) continue;
+                        seen.add(ref);
+                        const container = a.closest('li') || a.closest('tr') || a.parentElement;
+                        const fields = {};
+                        if (container) {
+                            const dl = container.querySelector('dl');
+                            if (dl) {
+                                const dts = dl.querySelectorAll('dt');
+                                const dds = dl.querySelectorAll('dd');
+                                for (let i = 0; i < dts.length && i < dds.length; i++) {
+                                    const k = dts[i].innerText.replace(':','').trim().toLowerCase();
+                                    fields[k] = dds[i].innerText.trim();
+                                }
                             }
                         }
+                        results.push({
+                            ref,
+                            href: a.href,
+                            address: fields['property'] || fields['address'] || '',
+                            proposal: fields['description'] || fields['proposal'] || '',
+                            status: fields['status'] || '',
+                            type: fields['type'] || '',
+                        });
                     }
                     return results;
                 }""")
@@ -105,8 +119,9 @@ class JerseyScraper(BaseScraper):
                         reference=d["ref"],
                         address=d.get("address", ""),
                         description=d.get("proposal", ""),
-                        url=SEARCH_URL,
-                        status=d.get("status"),
+                        url=d.get("href") or SEARCH_URL,
+                        status=d.get("status") or None,
+                        application_type=d.get("type") or None,
                     )
                     for d in data
                 ]

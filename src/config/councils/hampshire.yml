@@ -4,4 +4,5 @@ platform: planning_register
 base_url: https://planning.hants.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+# disabled_reason: WAF returns 403 Access Denied to httpx and curl with browser UA. IP/TLS-fingerprint blocked — needs residential proxy or full browser.

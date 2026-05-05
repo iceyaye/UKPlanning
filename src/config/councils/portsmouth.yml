@@ -4,3 +4,5 @@ platform: idox
 base_url: "http://publicaccess.portsmouth.gov.uk/online-applications"
 schedule: "0 3 * * *"
 requires_js: false
+enabled: false
+# disabled_reason: Azure WAF JS challenge returns 403 to all non-browser HTTP clients. Needs full browser.

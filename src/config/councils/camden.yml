@@ -5,3 +5,4 @@ base_url: https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer
 schedule: 0 3 * * *
 requires_js: false
 enabled: false
+# disabled_reason: 403 Forbidden on GET — site moved to NECSWS-hosted PE behind WAF. Needs new URL or full browser to bypass.

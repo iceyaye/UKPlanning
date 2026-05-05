@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from src.core.config import CouncilConfig
 from src.core.models import Application, Council, ScrapeRun
-from src.core.scraper import ApplicationDetail
+from src.core.scraper import ApplicationDetail, BaseScraper
 from src.scheduler.registry import ScraperRegistry
 
 logger = logging.getLogger(__name__)
@@ -54,25 +54,44 @@ async def run_council_scrape(
     apps_failed = 0
 
     try:
-        # Step 1: Gather IDs
-        summaries = await scraper.gather_ids(date_from, date_to)
-        apps_found = len(summaries)
-        logger.info("Scrape %s: found %d applications, fetching details...", config.authority_code, apps_found)
+        if type(scraper).scrape is not BaseScraper.scrape:
+            # Scraper overrides scrape() — it owns the full pipeline
+            result = await scraper.scrape(date_from, date_to)
+            if result.error:
+                raise RuntimeError(result.error)
+            apps_found = len(result.applications)
+            logger.info("Scrape %s: scrape() returned %d applications", config.authority_code, apps_found)
+            for detail in result.applications:
+                try:
+                    change_type = _upsert_application(session, council.id, detail)
+                    if change_type == "inserted":
+                        apps_inserted += 1
+                    elif change_type == "updated":
+                        apps_updated += 1
+                    session.commit()
+                except Exception as e:
+                    apps_failed += 1
+                    logger.warning("Error upserting %s/%s: %s", config.authority_code, detail.reference, e)
+                    session.rollback()
+        else:
+            # Standard pipeline: gather_ids + per-app fetch_detail with streaming inserts
+            summaries = await scraper.gather_ids(date_from, date_to)
+            apps_found = len(summaries)
+            logger.info("Scrape %s: found %d applications, fetching details...", config.authority_code, apps_found)
 
-        # Step 2: Fetch detail and insert each one immediately
-        for summary in summaries:
-            try:
-                detail = await scraper.fetch_detail(summary)
-                change_type = _upsert_application(session, council.id, detail)
-                if change_type == "inserted":
-                    apps_inserted += 1
-                elif change_type == "updated":
-                    apps_updated += 1
-                session.commit()
-            except Exception as e:
-                apps_failed += 1
-                logger.warning("Error fetching %s/%s: %s", config.authority_code, summary.uid, e)
-                session.rollback()
+            for summary in summaries:
+                try:
+                    detail = await scraper.fetch_detail(summary)
+                    change_type = _upsert_application(session, council.id, detail)
+                    if change_type == "inserted":
+                        apps_inserted += 1
+                    elif change_type == "updated":
+                        apps_updated += 1
+                    session.commit()
+                except Exception as e:
+                    apps_failed += 1
+                    logger.warning("Error fetching %s/%s: %s", config.authority_code, summary.uid, e)
+                    session.rollback()
 
         scrape_run.status = "success"
         scrape_run.applications_found = apps_found

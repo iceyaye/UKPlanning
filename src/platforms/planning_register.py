@@ -11,6 +11,8 @@ Used by ~30 UK councils. Two search approaches are supported:
 
 Detail pages are fetched from /Planning/Display?applicationNumber=...
 """
+import asyncio
+import logging
 import re
 import ssl
 from datetime import date, datetime
@@ -19,6 +21,8 @@ from urllib.parse import quote, unquote
 
 import httpx
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 
 def _make_ssl_context():
@@ -104,12 +108,42 @@ class PlanningRegisterScraper(BaseScraper):
         )
         self._disclaimer_accepted = False
 
+    async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """GET/POST with exponential backoff on 5xx and connection errors.
+
+        Retries up to 4 times for 502/503/504 (transient gateway errors) and
+        connection failures. Raises on terminal failures.
+        """
+        max_retries = 4
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await self._client.request(method, url, **kwargs)
+                if resp.status_code in (502, 503, 504) and attempt < max_retries:
+                    wait = min(2 ** (attempt + 1), 30)
+                    logger.info("planning_register %d on %s, retrying in %ds (attempt %d)",
+                                resp.status_code, url, wait, attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
+                return resp
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+                last_exc = e
+                if attempt == max_retries:
+                    raise
+                wait = min(2 ** (attempt + 1), 30)
+                logger.info("planning_register %s on %s, retrying in %ds (attempt %d)",
+                            type(e).__name__, url, wait, attempt + 1)
+                await asyncio.sleep(wait)
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("retry loop exhausted without resolution")
+
     async def _accept_disclaimer(self):
         """Accept the site disclaimer to get a session cookie."""
         if self._disclaimer_accepted:
             return
-        resp = await self._client.get(
-            f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
+        resp = await self._request_with_retry(
+            "GET", f"{self._base_url}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
         )
         html = resp.text
         soup = BeautifulSoup(html, "html.parser")
@@ -122,11 +156,11 @@ class PlanningRegisterScraper(BaseScraper):
                 name = inp.get("name", "")
                 if name:
                     form_data[name] = inp.get("value", "")
-            await self._client.post(post_url, data=form_data)
+            await self._request_with_retry("POST", post_url, data=form_data)
         else:
             # Fallback: try known endpoints
-            await self._client.post(
-                f"{self._base_url}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
+            await self._request_with_retry(
+                "POST", f"{self._base_url}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
             )
         self._disclaimer_accepted = True
 
@@ -145,7 +179,7 @@ class PlanningRegisterScraper(BaseScraper):
     async def _gather_ids_post(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search via POST /Search/Results (AJAX form submission)."""
         # Get the CSRF token from the search page
-        resp = await self._client.get(f"{self._base_url}/Search/Advanced")
+        resp = await self._request_with_retry("GET", f"{self._base_url}/Search/Advanced")
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         token_el = soup.find("input", {"name": "__RequestVerificationToken"})
@@ -172,8 +206,8 @@ class PlanningRegisterScraper(BaseScraper):
                 "ExcludeDecidedApps": "false",
                 "__RequestVerificationToken": token,
             }
-            resp = await self._client.post(
-                f"{self._base_url}/Search/Results",
+            resp = await self._request_with_retry(
+                "POST", f"{self._base_url}/Search/Results",
                 data=form_data,
                 headers={"X-Requested-With": "XMLHttpRequest"},
             )
@@ -218,8 +252,8 @@ class PlanningRegisterScraper(BaseScraper):
                 else next_href
             )
             page_num += 1
-            resp = await self._client.get(
-                next_url, headers={"X-Requested-With": "XMLHttpRequest"}
+            resp = await self._request_with_retry(
+                "GET", next_url, headers={"X-Requested-With": "XMLHttpRequest"}
             )
             resp.raise_for_status()
 
@@ -246,7 +280,9 @@ class PlanningRegisterScraper(BaseScraper):
                 f"?SearchType=Planning"
                 f"&{from_param}={from_str}&{to_param}={to_str}"
             )
-            resp = await self._client.get(url)
+            resp = await self._request_with_retry("GET", url)
+            if resp.status_code == 500:
+                continue  # Some councils 500 on unsupported date param; try next
             resp.raise_for_status()
             if "/Planning/Display/" in resp.text:
                 break  # Found results
@@ -284,8 +320,8 @@ class PlanningRegisterScraper(BaseScraper):
 
             next_url = f"{self._base_url}{next_href}" if next_href.startswith("/") else next_href
             page_num += 1
-            resp = await self._client.get(
-                next_url, headers={"X-Requested-With": "XMLHttpRequest"}
+            resp = await self._request_with_retry(
+                "GET", next_url, headers={"X-Requested-With": "XMLHttpRequest"}
             )
             resp.raise_for_status()
 
@@ -325,7 +361,7 @@ class PlanningRegisterScraper(BaseScraper):
         """Fetch application detail page."""
         await self._accept_disclaimer()
 
-        resp = await self._client.get(application.url)
+        resp = await self._request_with_retry("GET", application.url)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
