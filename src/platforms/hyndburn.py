@@ -19,7 +19,7 @@ This scraper can also serve other councils running the same Northgate Assure
 platform by adding entries to COUNCIL_CONFIG.
 """
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 from urllib.parse import quote_plus, urlencode
 
@@ -246,13 +246,17 @@ class NorthgateAssureScraper(BaseScraper):
     )
 
     async def _search_advanced(
-        self, date_from: date, date_to: date
+        self, date_from: date, date_to: date, depth: int = 0
     ) -> List[ApplicationSummary]:
         """Use Advanced Search with `Received between` — returns all apps in
         the range regardless of keyword. Builds form data as an ordered list
         of (key, value) pairs to preserve ASP.NET checkbox+hidden duplicates;
         when sent as a dict, Python dedupes the duplicate keys and the model
         binder receives the wrong value, returning 0 results.
+
+        When the server responds with "Too many results", bisect the date
+        range and recurse — the platform doesn't expose a higher page-size
+        limit, so this is the only way to reach apps beyond the cap.
         """
         # Start from the live-form pairs (preserves order, duplicates, and
         # ApplicationStatutes[N] entries) and apply our overrides.
@@ -325,6 +329,26 @@ class NorthgateAssureScraper(BaseScraper):
             return []
         if resp.status_code != 200:
             return []
+
+        # Server caps results at ~500 (Northgate Assure default). When the
+        # cap is exceeded the response says "Too many results have been
+        # found." — bisect the date range to drill below the cap.
+        if "Too many results" in resp.text and date_from < date_to and depth < 6:
+            mid = date_from + (date_to - date_from) / 2
+            left = await self._search_advanced(date_from, mid, depth + 1)
+            right_from = mid + timedelta(days=1)
+            right = (
+                await self._search_advanced(right_from, date_to, depth + 1)
+                if right_from <= date_to else []
+            )
+            seen: set = set()
+            merged: List[ApplicationSummary] = []
+            for s in left + right:
+                if s.uid in seen:
+                    continue
+                seen.add(s.uid)
+                merged.append(s)
+            return merged
 
         summaries = self._parse_search_results(resp.text)
         if summaries:
