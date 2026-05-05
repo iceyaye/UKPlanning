@@ -48,6 +48,19 @@ metrics from each probe.
 | P15 | `detail_url_stability`   | Re-fetch a known-historical detail URL captured 24h+ ago (if available) | 200 OK or a redirect to a stable equivalent. Catches PlanningExplorer-style ephemeral `PARAM0=N` URLs that expire. |
 | P16 | `field_label_vs_class`   | When a scraper extracts by CSS class (e.g. `field-name-field-date-received`), assert the visible label matches the assumed semantics | Mismatch raises a warning. Catches Scilly's `field-date-received` being labelled "Valid date". |
 | P17 | `worker_insert_parity`   | Compare `len(gather_ids)` vs `last_run.applications_updated` from a real DB run | Discrepancy > 0 with no fetch errors logged means silent fetch_detail failures (Tamworth pattern: gather returns 15, every detail 500s, 0 inserted). |
+| P18 | `extracted_value_not_label` | For each detail in P7, check that no extracted field's value equals a known field-label literally (`"Address"`, `"Reference"`, `"Proposal"`, `"Site Address"`, `"Status"`). | 0 fields have label-as-value. Catches scrapers like NorthDevon that pick up the wrapping `<h1>` element instead of the sibling `<h2>` value. |
+| P19 | `form_method_matches`    | Compare the `<form method=>` attribute to the HTTP verb the scraper actually sends. | Verb must match. WestDunbartonshire's form is `method=get` — POSTing silently ignores the date filter and returns 100 random apps spanning all years. |
+| P20 | `form_action_resolves`   | Compare the `<form action=>` URL to the URL the scraper posts/gets to. | Must match (after urljoin). Posting to the form page itself reshows the empty form on most sites; the action URL is usually a different endpoint (Rochford `dcdisplayinitialx.asp`, NorthDevon `/Search/Results`). |
+| P21 | `encoding_decoded_clean` | Scan extracted strings for the Unicode replacement char `�` and for windows-1252 high-bytes (0x91–0x97) that would arrive as mojibake under utf-8 decode. | 0 occurrences. WestDunbartonshire serves `text/html; charset=windows-1252` and httpx's default utf-8 decode raised `UnicodeDecodeError` on smart-quote bytes. |
+| P22 | `label_keys_no_colon`    | Inspect the keys of any `data` dict produced by `_extract_table_pairs` / `_extract_dl_pairs` helpers. | No key ends with `:`. WestDunbartonshire's helper kept the trailing colon (`'Reference Number:'`), so every downstream `data.get('Reference Number')` returned `''`. |
+| P23 | `selector_uniqueness`    | For each selector that uses `:-soup-contains('X')`, assert no OTHER `<dt>/<label>/<span>` on the page contains `'X'` as substring. | 0 cross-matches. Rochford `dt:-soup-contains('Proposal')` also matched `'Address Of Proposal'`, mis-filling description with the address. |
+| P24 | `selector_label_case`    | Scrape the visible labels from the detail page and compare against the strings inside `:-soup-contains(...)` selectors. | 0 case-only mismatches. Rochford detail labels were `'Address Of Proposal'` / `'Type Of Application'` (capital `'O'`); selectors said `'of'` and matched nothing. |
+| P25 | `pagination_url_distinct`| Track every page URL the scraper visits during pagination. | All distinct. SwiftLG `select_one(StartIndex)` always returned the first link (page 2) so we re-walked the same pages 12× until something stopped us. |
+| P26 | `pagination_endpoint_correct` | Some platforms paginate via a SEPARATE endpoint than the initial search. Check the scraper hits the right one for page 2+. | NorthgateAssure paginates via `/SearchResultsForPagination` (not `/OnlinePlanningSearchResults`). Re-using the search URL silently returns the first page each time. |
+| P27 | `form_pairs_preserve_duplicates` | If the form contains ASP.NET checkbox+hidden pairs (visible `name=X value=true` plus hidden `name=X value=false`), the scraper must send BOTH values, not let Python's dict dedupe to one. | NorthgateAssure Advanced Search returns 0 with one `AnyStatus` value sent and 64 with two. Send form data as `[(k,v), …]` ordered pairs, not a dict. |
+| P28 | `salesforce_quick_search_cap` | Salesforce Arcus `PR_SearchService.search` caps at 250 records and returns oldest-first. Check `thresholdHit=True` and drill the search by reference prefix. | If `thresholdHit=True` and the scraper doesn't drill, recent apps are silently missed. Reading: a single `PL/26` query returned only PL/26/0001..0250, missing everything after January. |
+| P29 | `salesforce_ref_prefix_literal` | Salesforce reference matching is literal substring. A 1-digit prefix like `PL/26/5` matches zero rows because all refs are 4-digit (no `PL/26/5XXX`). | Use 2-digit prefix chunks (`PL/26/00`..`PL/26/09`) so each search bucket corresponds to a real ref-number range. |
+| P30 | `salesforce_package_prefix` | Salesforce field names depend on the council's managed-package install: `arcusbuiltenv__Site_Address__c` vs `arcusbuilt__Portal_Site_Address__c`. | Selectors must accept both prefixes plus per-council custom fields. Eastleigh's records had Name set but every other field empty because the scraper only looked for `arcusbuiltenv__`. |
 
 ## Things we already know break, and how the test should report them
 
@@ -159,6 +172,102 @@ commits. The health-check should detect each automatically.
 - Action: write a one-off cleanup migration; not a scraper bug per
   se but the health-check should surface it.
 
+### "Form HTTP method mismatch"
+- Pattern: the form has `<form method="get">` but the scraper POSTs.
+  Some servers silently 200 the POST and return the unfiltered base
+  list (e.g. WestDunbartonshire returned ~100 random apps spanning
+  2006–2026 regardless of the date filter we sent).
+- Detection: P19. Or: scrape says N but the same N appears across
+  unrelated date ranges.
+- Action: read `<form method=>` and use that verb.
+
+### "Wrong endpoint URL — POSTing to the form page"
+- Pattern: the search form's `action=` attribute points at a
+  different URL than the page itself, but the scraper posts to the
+  page URL. The server reshows the empty form (HTTP 200, no error)
+  and the parser finds no result rows.
+- Examples: Rochford form on `dcsearch_appx.asp` with action
+  `dcdisplayinitialx.asp`; NorthDevon form action `/Search/Results`
+  while the scraper hit `/Search/Standard`.
+- Detection: P20. Or: response title equals the search-page title
+  rather than a results-page title.
+- Action: read the form's `action=` attribute and resolve it via
+  urljoin.
+
+### "windows-1252 page → utf-8 decode mojibake"
+- Pattern: legacy ASP/IIS sites declare `Content-Type: text/html;
+  charset=windows-1252` but httpx defaults to utf-8 — smart quotes
+  (`0x91`–`0x94`) and currency bytes raise UnicodeDecodeError, OR
+  the parser sees `�` in extracted strings.
+- Detection: P21.
+- Action: decode `resp.content.decode('windows-1252', errors='replace')`
+  before handing the body to BeautifulSoup.
+
+### "Trailing colon in label key"
+- Pattern: a `_extract_table_pairs` helper reads `<th>Reference Number:</th><td>DC26/01</td>` and stores the key with the colon (`'Reference Number:'`), so every downstream `data.get('Reference Number')` returns the empty default.
+- Detection: P22. Or: P7 fails for ALL rows with empty addresses/descriptions even though gather works.
+- Action: `key.rstrip(':').strip()` on every extracted label.
+
+### "soupsieve `:-soup-contains(...)` is substring, not exact"
+- Pattern: `dt:-soup-contains('Proposal')` matches both `'Proposal:'` and `'Address Of Proposal:'`, so description ends up filled with the site address.
+- Detection: P23. Programmatic check: enumerate all `<dt>` text on the page and grep for the selector substring; a match count > 1 means the selector is ambiguous.
+- Action: walk the dl/dt/dd structure manually for exact-label matching.
+
+### "CSS selector label case-mismatch"
+- Pattern: scraper says `:-soup-contains('Address of Proposal')` but the council renders `'Address Of Proposal'` (capital `'O'`). soupsieve's contains is case-sensitive.
+- Detection: P24.
+- Action: list both casings in the selector list, or normalise via the dl-pair walker.
+
+### "Pagination link selector picks the wrong link"
+- Pattern: `select_one('a[href*=StartIndex]')` returns the FIRST anchor with that param — usually page 2 or "Previous". Each page has all paging links, so the scraper revisits the same pages and accumulates duplicates. The DB upsert dedupes by reference so apparent `found=720, inserted=0` (SwiftLG/Walsall before fix).
+- Detection: P25. Or: gather count > 5× the platform's "X Results" header.
+- Action: walk paging URLs deduped by URL set, OR enumerate `StartIndex=1, StartIndex=11, StartIndex=21, …` directly.
+
+### "Pagination uses a different endpoint"
+- Pattern: NorthgateAssure paginates via
+  `/Planning/OnlinePlanning/SearchResultsForPagination` while the
+  initial search posts to `/Planning/OnlinePlanning/OnlinePlanningSearchResults`.
+- Detection: P26. Diagnostic: the page-2 POST returns the same first
+  20 results and `_has_next_page` keeps reporting True forever.
+- Action: read the form action with `data-url` for the paging link
+  (e.g. `<div id="generalSearchPagination" data-url="...">`).
+
+### "ASP.NET checkbox+hidden duplicates being dict-dedup'd"
+- Pattern: the form contains `<input type=checkbox name=AnyStatus value=true>` plus `<input type=hidden name=AnyStatus value=false>` — the browser submits BOTH values. Our scraper builds a `dict` from the form fields and Python dedupes the duplicate keys; the model binder then reads only the second value (`false`) and treats the criterion as missing → 0 results.
+- Detection: P27.
+- Action: send form data as an ordered list of `(key, value)` pairs and `urlencode` it manually; httpx's `content=` accepts the body as bytes.
+
+### "Salesforce Arcus quick-search 250-row cap"
+- Pattern: `PR_SearchService.search` returns the oldest 250 records and sets `thresholdHit=True`; if the scraper doesn't drill, the most-recent ~half of the year's apps are silently missed. Reading at PL/26: cap returned PL/26/0001..0250, latest received-date 2026-01-02 — everything since January was lost.
+- Detection: P28. The scraper should treat `thresholdHit=True` as a soft failure that triggers a more-specific search.
+- Action: drill by 2-digit reference-prefix chunks (`PL/26/00`..`PL/26/09`).
+
+### "Salesforce reference search is literal substring"
+- Pattern: refs are 4-digit sequences (e.g. PL/26/0508). A 1-digit prefix like `PL/26/5` matches ZERO rows because no ref starts `PL/26/5XXX`. A 2-digit prefix `PL/26/05` matches the 100-record `PL/26/05XX` bucket.
+- Detection: P29.
+- Action: build search terms by appending the leading 2 digits, not 1 digit.
+
+### "Salesforce managed-package prefix variation"
+- Pattern: different councils install different versions of the
+  Arcus managed package: `arcusbuiltenv__Site_Address__c` vs
+  `arcusbuilt__Portal_Site_Address__c`, with related-record dicts
+  like `arcusbuilt__Location__r.arcusgazetteer__Address__c` for
+  some councils (Eastleigh).
+- Detection: P30. Diagnostic: dump `record.keys()` for one record
+  and grep for `__c` suffixes — any prefix not in the scraper's
+  field-name table is a miss.
+- Action: list both `arcusbuiltenv__` and `arcusbuilt__` prefixes
+  in every field accessor; check related-record dicts for address
+  and case-officer.
+
+### "GET-only redirect strips path segment via urljoin"
+- Pattern: `urljoin("https://x/swift/apas/run", "WPHAPPDETAIL?...")`
+  produces `https://x/swift/apas/WPHAPPDETAIL?...` — `run` is
+  treated as a file, not a directory, so it's REPLACED by the
+  relative href. Detail URLs then 404 silently per app.
+- Detection: P7 fails 100% with 404.
+- Action: append `/` to the base before urljoin: `base.rstrip('/') + '/'`.
+
 ## Output format
 
 Emit one JSON line per council so the report can be diffed and consumed
@@ -213,10 +322,15 @@ fingerprints so its diagnostics are sharper. None of these need to
 | `planning_explorer`   | Detail-link `urljoin` base must be the StdResults page URL, NOT `config.base_url` (config typically lacks `/Generic/`). Whitespace inside `href="StdDetails.aspx?…PARAM0=\n\t\t…"` is collapsed by httpx but worth flagging. |
 | `northgate`           | New-style portal. `/Search/Advanced` → `/Search/Results`. Disclaimer flow is sticky via cookies.                   |
 | `northgate_assure`    | Form must be sent as ordered `(key, value)` pairs — ASP.NET checkbox+hidden duplicates (e.g. `AnyStatus=true&AnyStatus=false`) get dedup'd by Python dict and the model binder rejects the search. Pagination uses a separate URL `/SearchResultsForPagination` with `PagingParameters.PageSize/CurrentPageIndex/TotalRecords`. Advanced Search is the only endpoint that lists all apps in a date range. |
-| `planning_register`   | Disclaimer cookie must be carried. `/Search/Standard` 500s on certain date-param names per council — try `AcknowledgeLetterDateFrom`, `DateReceivedFrom`, `DateValidFrom`, `DateDeterminedFrom` in turn. Retry on 502/503/504 (Pantheon-style transient gateway errors). |
+| `planning_register`   | Disclaimer cookie must be carried. Three search-path variants exist: GET `/Search/Standard` (most councils, with `AcknowledgeLetterDateFrom` etc); POST `/Search/Results` (NorthDevon, SouthOxfordshire, Whitehorse — `DateReceivedFrom` etc + `__RequestVerificationToken`); POST `/Search/List` (Leicestershire — `SearchParams.DateReceivedFrom` + `AdvancedSearch=True`). Retry on 502/503/504 (Pantheon-style transient gateway errors). |
 | `salesforce_direct`   | Two managed-package prefixes: `arcusbuiltenv__` (Anglesey/Carmarthenshire/Wiltshire) and `arcusbuilt__` (Eastleigh, no `env`). Reference is `Name`, not `Id`. Address may live in a related-record dict (`Location__r`). |
 | `scillyisles`         | Drupal 7. List has no date column — must filter by year-prefix in reference, then per-app detail GET. Pantheon WAF blocks Python TLS — uses curl subprocess. Dates are `Friday, 1 May, 2026`. CSS `field-date-received` is labelled "Valid date" in the UI. |
-| `tascomi`             | Weekly received-list endpoint. Some sites don't accept date-range queries — must walk the most-recent N weeks and filter client-side. |
+| `tascomi`             | The `getReceivedWeeklyList` form needs `week=YYYY-MM-DD` (Monday of an ISO week) POSTed. A bare GET reshows the empty form on most councils — Stoke/Gloucestershire/Denbighshire showed 0 apps until we enumerated every Monday in the date range. |
+| `swiftlg`             | Slow Oracle backend (Walsall: ~28s/POST, exceeded the 30s default httpx timeout). Pagination links list every page number with the same `?StartIndex=N` shape; `select_one` always picked page 2 → infinite reuse. base_url often lacks a trailing slash so `urljoin` drops the last path segment from detail URLs. |
+| `westdunbarton`       | Classic ASP. Form is `method=get` with action `dcdisplayinitialx.asp` (NOT the search page itself). POSTing or hitting the wrong URL silently returns 100 random apps spanning all years. Page is windows-1252 encoded. Two-column tables keep trailing colons on labels. |
+| `rochford`            | Astun GIS template portal. Search is GET to `DevelopmentControl.aspx` with all hidden form fields including a per-session `history` token — POSTing reshows the empty form. Result rows put the reference inside `<dd class="last">… <strong>26/00323/DOC</strong> received on <strong>21/04/2026</strong>` so a regex over the whole text concatenates date with ref. Detail labels have capital letters: `'Address Of Proposal'`, `'Type Of Application'`. |
+| `salesforce` (Arcus)  | `PR_SearchService.search` quick-search caps at 250 records oldest-first and sets `thresholdHit=True`. Drill by 2-digit reference prefix (`PL/26/00`..`PL/26/09`) to keep each bucket under the cap. Reference matching is literal substring; 1-digit prefixes return zero. |
+| `salesforce_direct`   | Two managed-package prefixes co-exist: `arcusbuiltenv__` (Anglesey/Carmarthenshire/Wiltshire) and `arcusbuilt__` (Eastleigh). Per-council custom fields like `Portal_Site_Address__c` are common; address can also live in a related-record dict (`Location__r.arcusgazetteer__Address__c`). Reference is `Name`, never `Id`. |
 | `kensington` (custom) | SolidJS SPA. Requires Playwright. Date filter is client-side after fetching all DOM-rendered cards. |
 | `boston` (custom)     | Granicus form behind Cloudflare. Headless Playwright is detected and re-challenged. Currently disabled. |
 | `jersey` (custom)     | ASP.NET form with date-dropdowns. Cookie banner overlays results table — extract via `<dl>/<dt>/<dd>` pairs in the result `<li>`, not generic table rows. |
