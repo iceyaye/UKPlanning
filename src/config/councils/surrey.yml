@@ -4,4 +4,7 @@ platform: planning_register
 base_url: https://planning.surreycc.gov.uk
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+# disabled_reason: Incapsula WAF JS challenge — initial GET returns a
+# 212-byte Incapsula bootloader (no planning_register HTML). Same
+# block as Brighton; needs a full browser to clear the challenge.

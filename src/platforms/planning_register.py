@@ -76,6 +76,7 @@ COUNCIL_URLS = {
 POST_SEARCH_COUNCILS = {
     "southoxfordshire",
     "whitehorse",
+    "northdevon",
 }
 
 
@@ -167,14 +168,83 @@ class PlanningRegisterScraper(BaseScraper):
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search for applications in a date range.
 
-        Uses POST /Search/Results for councils in POST_SEARCH_COUNCILS,
-        otherwise falls back to GET /Search/Standard.
+        Uses POST /Search/List for `leicestershire` (variant with
+        SearchParams.* prefix), POST /Search/Results for councils in
+        POST_SEARCH_COUNCILS, otherwise falls back to GET /Search/Standard.
         """
         await self._accept_disclaimer()
 
+        if self.config.authority_code == "leicestershire":
+            return await self._gather_ids_search_list(date_from, date_to)
         if self.config.authority_code in POST_SEARCH_COUNCILS:
             return await self._gather_ids_post(date_from, date_to)
         return await self._gather_ids_standard(date_from, date_to)
+
+    async def _gather_ids_search_list(
+        self, date_from: date, date_to: date
+    ) -> List[ApplicationSummary]:
+        """Leicestershire-specific search: POST /Search/List with
+        SearchParams.* field prefix and AdvancedSearch=True."""
+        resp = await self._request_with_retry("GET", f"{self._base_url}/Search/Advanced")
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        token_el = soup.find("input", {"name": "__RequestVerificationToken"})
+        token = token_el.get("value", "") if token_el else ""
+
+        form_data = {
+            "__RequestVerificationToken": token,
+            "AdvancedSearch": "True",
+            "SearchParams.ApplicationOrDistrictNumbers": "",
+            "SearchParams.Address": "",
+            "SearchParams.Proposal": "",
+            "SearchParams.Parish": "",
+            "SearchParams.Ward": "",
+            "SearchParams.District": "",
+            "SearchParams.Decision": "",
+            "SearchParams.ApplicationType": "",
+            "SearchParams.DateReceivedFrom": date_from.strftime("%d/%m/%Y"),
+            "SearchParams.DateReceivedTo": date_to.strftime("%d/%m/%Y"),
+            "SearchParams.DateIssuedFrom": "",
+            "SearchParams.DateIssuedTo": "",
+        }
+        resp = await self._request_with_retry(
+            "POST", f"{self._base_url}/Search/List", data=form_data,
+        )
+        resp.raise_for_status()
+
+        summaries: List[ApplicationSummary] = []
+        seen: set = set()
+        page_num = 1
+        max_pages = 50
+        while resp and page_num <= max_pages:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            page_count = 0
+            for link in soup.find_all("a", href=re.compile(r"/Planning/Display")):
+                href = link.get("href", "")
+                if href in seen:
+                    continue
+                seen.add(href)
+                page_count += 1
+                ref_match = re.search(
+                    r"/Planning/Display[/?](?:applicationNumber=)?(.+)$", href
+                )
+                ref = unquote(ref_match.group(1)) if ref_match else unquote(href)
+                full_url = f"{self._base_url}{href}" if href.startswith("/") else href
+                summaries.append(ApplicationSummary(uid=ref, url=full_url))
+            if page_count == 0:
+                break
+            next_href = self._find_next_page(soup, page_num)
+            if not next_href:
+                break
+            next_url = (
+                f"{self._base_url}{next_href}"
+                if next_href.startswith("/")
+                else next_href
+            )
+            page_num += 1
+            resp = await self._request_with_retry("GET", next_url)
+            resp.raise_for_status()
+        return summaries
 
     async def _gather_ids_post(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search via POST /Search/Results (AJAX form submission)."""

@@ -4,4 +4,11 @@ platform: planning_explorer
 base_url: https://planning.tamworth.gov.uk/northgate/planningexplorer
 schedule: 0 3 * * *
 requires_js: false
-enabled: true
+enabled: false
+# disabled_reason: Detail-page server returns HTTP 500 for every PARAM0
+# regardless of which application id we send (verified across multiple
+# IDs spanning the search-result range). The search form works and
+# returns matches, but the detail endpoint at /StdDetails.aspx is
+# broken upstream — every fetch_detail fails so found=N updated=0
+# permanently. Re-enable after confirming the council has fixed their
+# detail endpoint (try a known-good PARAM0 in a browser).
