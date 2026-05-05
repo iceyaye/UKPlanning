@@ -17,6 +17,7 @@ from src.core.scraper import ApplicationDetail, ApplicationSummary, BaseScraper
 
 BASE_URL = "https://apps.west-dunbarton.gov.uk"
 SEARCH_URL = f"{BASE_URL}/dcsearch_appx.asp"
+RESULTS_URL = f"{BASE_URL}/dcdisplayinitialx.asp"
 DETAIL_URL = f"{BASE_URL}/dcdisplayfull.asp"
 
 
@@ -36,13 +37,17 @@ def _detail_url(uid: str) -> str:
 
 
 def _extract_table_pairs(soup: BeautifulSoup) -> dict:
-    """Extract label/value pairs from two-column table rows."""
+    """Extract label/value pairs from two-column table rows.
+
+    Labels include the trailing colon (e.g. `'Reference Number:'`) which would
+    miss every `data.get('Reference Number')` lookup downstream. Strip them.
+    """
     pairs = {}
     for tr in soup.find_all("tr"):
         tds = tr.find_all("td")
         if len(tds) >= 2:
-            label = tds[0].get_text(strip=True)
-            value = tds[1].get_text(strip=True)
+            label = tds[0].get_text(" ", strip=True).rstrip(":").strip()
+            value = tds[1].get_text(" ", strip=True)
             if label and value:
                 pairs[label] = value
     return pairs
@@ -66,24 +71,39 @@ class WestDunbartonScraper(BaseScraper):
         )
 
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
-        # GET the search page first to establish session
-        await self._client.get(SEARCH_URL)
-
-        # POST with date range
-        form_data = {
-            "vDateRcvFr": date_from.strftime("%d/%m/%Y"),
-            "vDateRcvTo": date_to.strftime("%d/%m/%Y"),
-        }
-
-        resp = await self._client.post(SEARCH_URL, data=form_data)
+        # GET the search form to seed the session and confirm field defaults
+        search_resp = await self._client.get(SEARCH_URL)
+        # The site is windows-1252 encoded; decode bytes explicitly so the
+        # parser doesn't choke on the GBP/special-char bytes.
+        form_html = search_resp.content.decode("windows-1252", errors="replace")
+        soup = BeautifulSoup(form_html, "html.parser")
+        form = soup.find("form")
+        form_data = {}
+        if form:
+            for inp in form.find_all("input"):
+                name = inp.get("name", "")
+                if not name:
+                    continue
+                if (inp.get("type") or "").lower() == "submit":
+                    form_data[name] = inp.get("value", "Search")
+                else:
+                    form_data[name] = inp.get("value", "") or ""
+            for sel in form.find_all("select"):
+                name = sel.get("name", "")
+                if name:
+                    form_data[name] = ""
+        form_data["vDateRcvFr"] = date_from.strftime("%d/%m/%Y")
+        form_data["vDateRcvTo"] = date_to.strftime("%d/%m/%Y")
+        # The form is a GET (method=get on the <form> element). POST silently
+        # returns the unfiltered list of ~100 random recent applications.
+        resp = await self._client.get(RESULTS_URL, params=form_data)
         resp.raise_for_status()
+        body = resp.content.decode("windows-1252", errors="replace")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(body, "html.parser")
         summaries = []
         seen = set()
 
-        # Results page contains a table with application references
-        # Look for links to detail pages or cells containing reference numbers
         for link in soup.find_all("a", href=re.compile(r"dcdisplayfull", re.I)):
             href = link.get("href", "")
             uid = link.get_text(strip=True)
@@ -93,7 +113,6 @@ class WestDunbartonScraper(BaseScraper):
             full_url = href if href.startswith("http") else f"{BASE_URL}/{href.lstrip('/')}"
             summaries.append(ApplicationSummary(uid=uid, url=full_url))
 
-        # Fallback: extract UIDs from table cells matching DC reference pattern
         if not summaries:
             for td in soup.find_all("td"):
                 text = td.get_text(strip=True)
@@ -110,7 +129,8 @@ class WestDunbartonScraper(BaseScraper):
         resp = await self._client.get(url)
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        body = resp.content.decode("windows-1252", errors="replace")
+        soup = BeautifulSoup(body, "html.parser")
         data = _extract_table_pairs(soup)
 
         return ApplicationDetail(

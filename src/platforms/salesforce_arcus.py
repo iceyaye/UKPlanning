@@ -189,6 +189,28 @@ class SalesforceArcusScraper(BaseScraper):
 
         return action.get("returnValue", {})
 
+    def _build_search_terms(self, year: int, yy: str) -> List[str]:
+        """Build a sequence of search terms covering all apps for a year.
+
+        Salesforce Arcus quick-search caps results at 250 per call; for busy
+        councils (e.g. Reading: 500+ apps/year) a single `PL/26` query
+        truncates to the oldest 250 records and we miss everything recent.
+        Reference numbers are 4-digit sequences so the search is a literal
+        substring match — `PL/26/5` returns 0 because no ref starts there;
+        we drill by 2-digit chunks (`PL/26/00`…`PL/26/09`) to keep each
+        result set well under the cap.
+        """
+        terms: List[str] = []
+        if self._ref_prefix:
+            for d in range(10):
+                terms.append(f"{self._ref_prefix}/{yy}/0{d}")
+            terms.append(f"{self._ref_prefix}/{yy}")
+        else:
+            for d in range(10):
+                terms.append(f"/{yy}/0{d}")
+            terms.extend([f"/{yy}", str(year), f"{yy}/"])
+        return terms
+
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search for planning applications using multiple search terms."""
         all_summaries = []
@@ -197,10 +219,7 @@ class SalesforceArcusScraper(BaseScraper):
         years = {date_from.year, date_to.year}
         for year in sorted(years):
             yy = f"{year % 100:02d}"
-            search_terms = [f"/{yy}", str(year), f"{yy}/"]
-            if self._ref_prefix:
-                search_terms.insert(0, f"{self._ref_prefix}/{yy}")
-            for term in search_terms:
+            for term in self._build_search_terms(year, yy):
                 try:
                     result = await self._aura_call("PR_SearchService", "search", {
                         "request": {
@@ -265,10 +284,7 @@ class SalesforceArcusScraper(BaseScraper):
             seen_ids = set()
             for year in sorted(years):
                 yy = f"{year % 100:02d}"
-                search_terms = [f"/{yy}", str(year), f"{yy}/"]
-                if self._ref_prefix:
-                    search_terms.insert(0, f"{self._ref_prefix}/{yy}")
-                for term in search_terms:
+                for term in self._build_search_terms(year, yy):
                     try:
                         result = await self._aura_call("PR_SearchService", "search", {
                             "request": {

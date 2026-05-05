@@ -51,14 +51,21 @@ DETAIL_TEMPLATE = (
 ROCHFORD_DETAIL_SELECTORS = {
     "reference": ["dt:-soup-contains('Application Reference') + dd"],
     "address": [
+        "dt:-soup-contains('Address Of Proposal') + dd",
         "dt:-soup-contains('Address of Proposal') + dd",
         "dt:-soup-contains('Site Address') + dd",
     ],
     "description": [
-        "dt:-soup-contains('Proposal') + dd",
+        # The custom dl-pair walker in _extract_dl_pairs handles this cleanly;
+        # the parser's :-soup-contains here is too broad ('Proposal' matches
+        # 'Address Of Proposal' too) so leave the parser-based fallback for
+        # other Astun sites only.
         "dt:-soup-contains('Description') + dd",
     ],
-    "application_type": ["dt:-soup-contains('Type of Application') + dd"],
+    "application_type": [
+        "dt:-soup-contains('Type Of Application') + dd",
+        "dt:-soup-contains('Type of Application') + dd",
+    ],
     "status": ["dt:-soup-contains('Status') + dd"],
     "decision": ["dt:-soup-contains('Decision') + dd"],
     "decided_by": ["dt:-soup-contains('Decision Type') + dd"],
@@ -121,18 +128,47 @@ class RochfordScraper(BaseScraper):
             rate_limit_delay=config.rate_limit_delay,
         )
 
+    @staticmethod
+    def _extract_search_form(html: str) -> Dict[str, str]:
+        """Pull every hidden+text input default from the live search form.
+
+        The hidden `history` field is a per-session token; without it the
+        server treats the request as a fresh form-load instead of a search.
+        """
+        soup = BeautifulSoup(html, "lxml")
+        form = soup.find("form")
+        if not form:
+            return {}
+        fields: Dict[str, str] = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name", "")
+            if not name:
+                continue
+            input_type = (inp.get("type") or "").lower()
+            if input_type in ("submit", "button"):
+                continue
+            fields[name] = inp.get("value", "") or ""
+        for sel in form.find_all("select"):
+            name = sel.get("name", "")
+            if not name:
+                continue
+            chosen = sel.find("option", selected=True) or sel.find("option")
+            fields[name] = chosen.get("value", "") if chosen else ""
+        return fields
+
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
-        """POST date-range search and paginate through results."""
-        # Load search page to establish session
-        await self._client.get(SEARCH_URL)
+        """GET date-range search via the search form's actual fields and
+        paginate through results. The search form is a *GET* request to
+        DevelopmentControl.aspx with `template=DevelopmentControlResults.tmpl`
+        and a per-session `history` token from the search page; POSTing
+        to the search-form URL just reshows the empty form."""
+        search_resp = await self._client.get(SEARCH_URL)
+        search_form = self._extract_search_form(search_resp.text)
+        search_form[self.DATE_FROM_FIELD] = date_from.strftime(self.DATE_FORMAT)
+        search_form[self.DATE_TO_FIELD] = date_to.strftime(self.DATE_FORMAT)
+        search_form["maxrecords"] = "300"
 
-        form_data = {
-            self.DATE_FROM_FIELD: date_from.strftime(self.DATE_FORMAT),
-            self.DATE_TO_FIELD: date_to.strftime(self.DATE_FORMAT),
-            "maxrecords": "300",
-        }
-
-        response = await self._client.post(SEARCH_URL, data=form_data)
+        response = await self._client.get(BASE_URL + "/DevelopmentControl.aspx", params=search_form)
         html = response.text
         current_url = str(response.url)
 
@@ -175,18 +211,26 @@ class RochfordScraper(BaseScraper):
             if not link:
                 continue
 
-            # Reference is in the next dd.last sibling
-            dd_tag = dt_tag.find_next_sibling("dd", class_="last")
+            # Reference is the FIRST <strong> in the next dd.last sibling.
+            # The dd is structured "Application reference: <strong>26/00323/DOC</strong>
+            # received on <strong>21/04/2026</strong>" — take_get_text(strip=True)
+            # would concatenate everything; pull the strong tag explicitly.
             uid = None
+            dd_tag = dt_tag.find_next_sibling("dd", class_="last")
             if dd_tag:
-                text = dd_tag.get_text(strip=True)
-                ref_match = re.search(r"Application reference:\s*(.+)", text, re.I)
-                if ref_match:
-                    uid = ref_match.group(1).strip()
+                strong = dd_tag.find("strong")
+                if strong:
+                    uid = strong.get_text(strip=True)
+                if not uid:
+                    text = dd_tag.get_text(strip=True)
+                    ref_match = re.search(
+                        r"Application reference:\s*([^\s]+)", text, re.I
+                    )
+                    if ref_match:
+                        uid = ref_match.group(1).strip()
 
             if not uid:
                 uid = link.get_text(strip=True)
-
             if not uid:
                 continue
 
@@ -225,11 +269,34 @@ class RochfordScraper(BaseScraper):
         separator = "&" if "?" in current_url else "?"
         return f"{current_url}{separator}pageno={page_num}"
 
+    @staticmethod
+    def _extract_dl_pairs(html: str) -> Dict[str, str]:
+        """Walk every dt/dd pair on the page and return a label→value map.
+
+        This sidesteps a soupsieve gotcha: `dt:-soup-contains('Proposal') + dd`
+        also matches 'Address Of Proposal:' which would mis-fill description
+        with the site address. Walking pairs gives an exact-label lookup."""
+        soup = BeautifulSoup(html, "lxml")
+        result: Dict[str, str] = {}
+        for dt in soup.find_all("dt"):
+            label = dt.get_text(" ", strip=True).rstrip(":").strip()
+            dd = dt.find_next_sibling("dd")
+            if dd:
+                result[label] = dd.get_text(" ", strip=True)
+        return result
+
     async def fetch_detail(self, application: ApplicationSummary) -> ApplicationDetail:
         """Fetch full details from multiple template pages."""
         # Main application page
         main_html = await self._client.get_html(application.url)
         main_data = self._parser.extract(main_html, ROCHFORD_DETAIL_SELECTORS)
+        # Override description with an exact-label lookup so 'Address Of
+        # Proposal' doesn't bleed into it.
+        pairs = self._extract_dl_pairs(main_html)
+        for k, v in pairs.items():
+            kl = k.lower()
+            if kl == "proposal" and not main_data.get("description"):
+                main_data["description"] = v
 
         # Dates page
         dates_data = await self._fetch_sub_page(
