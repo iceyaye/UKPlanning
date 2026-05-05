@@ -21,7 +21,7 @@ platform by adding entries to COUNCIL_CONFIG.
 import re
 from datetime import date, datetime
 from typing import Dict, List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import httpx
 from bs4 import BeautifulSoup
@@ -57,7 +57,7 @@ SEARCH_PAGE = "/Planning/OnlinePlanning/OnlinePlanningSearch"
 SEARCH_RESULTS = "/Planning/OnlinePlanning/OnlinePlanningSearchResults"
 WEEKLY_MONTHLY_RESULTS = "/Planning/OnlinePlanning/OnlinePlanningSearchResultsForWeeklyMonthlyGo"
 DETAIL_PAGE = "/Planning/OnlinePlanning/OnlinePlanningOverview"
-PAGINATION_URL = "/Planning/OnlinePlanning/OnlinePlanningSearchResults"
+PAGINATION_URL = "/Planning/OnlinePlanning/SearchResultsForPagination"
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -110,56 +110,48 @@ class NorthgateAssureScraper(BaseScraper):
             return
         resp = await self._client.get(self._base_url + SEARCH_PAGE)
         resp.raise_for_status()
-        self._base_form = self._extract_form_fields(resp.text)
+        self._base_form_pairs = self._extract_form_field_pairs(resp.text)
+        self._base_form = dict(self._base_form_pairs)
         self._session_ready = True
 
     @staticmethod
-    def _extract_form_fields(html: str) -> Dict[str, str]:
-        """Pull every input/select default value from the live search form.
-
-        The Northgate Assure search server rejects POSTs (500) when fields
-        like ApplicationStatutes[0..N].Selected are missing — they're built
-        dynamically from the council's status configuration so we can't hard-
-        code them.
-        """
+    def _extract_form_field_pairs(html: str) -> List[tuple]:
+        """Pull every input/select default value from the live search form, in
+        document order, preserving duplicate keys (ASP.NET checkbox emits a
+        visible input plus a hidden "false" with the same name — both must be
+        sent or the model binder treats the value as missing)."""
         soup = BeautifulSoup(html, "html.parser")
         form = soup.find("form")
         if not form:
-            return {}
-        fields: Dict[str, str] = {}
-        for inp in form.find_all("input"):
-            name = inp.get("name", "")
+            return []
+        pairs: List[tuple] = []
+        for el in form.find_all(["input", "select", "textarea"]):
+            name = el.get("name", "")
             if not name:
                 continue
-            input_type = (inp.get("type") or "").lower()
-            value = inp.get("value", "")
-            if input_type == "checkbox":
-                # ASP.NET emits two inputs per checkbox: visible (type=checkbox)
-                # and a hidden "false". Honour `checked` on the visible one;
-                # the hidden one keeps the false so don't overwrite if checked.
-                if inp.has_attr("checked"):
-                    fields[name] = value if value else "true"
-                elif name not in fields:
-                    fields[name] = value or "false"
-            elif input_type == "radio":
-                if inp.has_attr("checked"):
-                    fields[name] = value
-                elif name not in fields:
-                    fields.setdefault(name, "")
-            else:
-                # text, hidden, submit etc.
-                fields[name] = value
-        for sel in form.find_all("select"):
-            name = sel.get("name", "")
-            if not name:
-                continue
-            chosen = sel.find("option", selected=True) or sel.find("option")
-            fields[name] = chosen.get("value", "") if chosen else ""
-        for ta in form.find_all("textarea"):
-            name = ta.get("name", "")
-            if name:
-                fields[name] = ta.get_text() or ""
-        return fields
+            tag = el.name
+            if tag == "input":
+                input_type = (el.get("type") or "").lower()
+                value = el.get("value", "")
+                if input_type == "checkbox":
+                    # An HTML form only submits an unchecked checkbox's value
+                    # when there's a paired hidden input of the same name (a
+                    # common ASP.NET pattern). Skip the visible checkbox when
+                    # it isn't checked — the paired hidden input still emits
+                    # the "false" value separately and gets picked up below.
+                    if el.has_attr("checked"):
+                        pairs.append((name, value or "true"))
+                elif input_type == "radio":
+                    if el.has_attr("checked"):
+                        pairs.append((name, value))
+                else:
+                    pairs.append((name, value))
+            elif tag == "select":
+                chosen = el.find("option", selected=True) or el.find("option")
+                pairs.append((name, chosen.get("value", "") if chosen else ""))
+            elif tag == "textarea":
+                pairs.append((name, el.get_text() or ""))
+        return pairs
 
     def _ajax_headers(self) -> Dict[str, str]:
         return {
@@ -201,19 +193,22 @@ class NorthgateAssureScraper(BaseScraper):
     async def gather_ids(self, date_from: date, date_to: date) -> List[ApplicationSummary]:
         """Search for planning applications in a date range.
 
-        Northgate Assure has no "list everything in date range" endpoint, so
-        we union three strategies:
-         1. Keyword search (postcode prefixes + reference fragments) with
-            custom date range — basic search requires ≥3 chars SearchInput.
-         2. Monthly list for each month overlapping the range, both
-            ValidatedThisMonth and DecidedThisMonth statuses.
-         3. Weekly list as a final fallback if both above are empty.
+        Primary strategy: Advanced Search with `Received between` filter — this
+        is the only Northgate Assure endpoint that returns ALL applications in
+        a date range without keyword filtering. Keyword/monthly/weekly searches
+        run as fallbacks only if Advanced Search returns nothing (some sites
+        may have it disabled).
         """
         await self._ensure_session()
 
+        # Primary: Advanced Search by Received date range
+        primary = await self._search_advanced(date_from, date_to)
+        if primary:
+            return primary
+
+        # Fallbacks (older code paths, kept for sites where Advanced is missing)
         seen: set = set()
         merged: List[ApplicationSummary] = []
-
         for src in (
             await self._search_by_date_range(date_from, date_to),
             await self._search_monthly_list(date_from, date_to),
@@ -223,12 +218,189 @@ class NorthgateAssureScraper(BaseScraper):
                     continue
                 seen.add(s.uid)
                 merged.append(s)
-
         if merged:
             return merged
-
-        # Last-resort fallback if nothing turned up
         return await self._search_weekly_monthly(date_from, date_to)
+
+    # Advanced-search fields that aren't in the initial search HTML (they're
+    # injected by JS when the user clicks "Advanced search"). We seed empty
+    # values so the server-side model binder receives the full AdvanceSearch
+    # object — without these the search returns no results.
+    _ADVANCE_BLANKS = (
+        "AdvanceSearch.AgentName",
+        "AdvanceSearch.AnyOfTheseUnwantedWords",
+        "AdvanceSearch.ApplicantName",
+        "AdvanceSearch.ApplicationNumber",
+        "AdvanceSearch.SiteAddress",
+        "AdvanceSearch.SiteAddress.AddressIdentifier",
+        "AdvanceSearch.SiteAddress.BuildingNameOrNumber",
+        "AdvanceSearch.SiteAddress.County",
+        "AdvanceSearch.SiteAddress.DisplayAddress",
+        "AdvanceSearch.SiteAddress.FlatNumber",
+        "AdvanceSearch.SiteAddress.Locality",
+        "AdvanceSearch.SiteAddress.MFAKey",
+        "AdvanceSearch.SiteAddress.Postcode",
+        "AdvanceSearch.SiteAddress.Street",
+        "AdvanceSearch.SiteAddress.Town",
+        "AdvanceSearch.SiteAddress.Uprn",
+    )
+
+    async def _search_advanced(
+        self, date_from: date, date_to: date
+    ) -> List[ApplicationSummary]:
+        """Use Advanced Search with `Received between` — returns all apps in
+        the range regardless of keyword. Builds form data as an ordered list
+        of (key, value) pairs to preserve ASP.NET checkbox+hidden duplicates;
+        when sent as a dict, Python dedupes the duplicate keys and the model
+        binder receives the wrong value, returning 0 results.
+        """
+        # Start from the live-form pairs (preserves order, duplicates, and
+        # ApplicationStatutes[N] entries) and apply our overrides.
+        pairs: List[tuple] = []
+        overrides = {
+            "IsAdvanceSearch": "true",
+            "IsWeeklyListSearch": "false",
+            "IsMonthlyListSearch": "false",
+            "SearchInput": "",
+            "Received": "True",
+            "AdvanceSearch.ReceivedFromDate": date_from.strftime(self.DATE_FORMAT),
+            "AdvanceSearch.ReceivedToDate": date_to.strftime(self.DATE_FORMAT),
+            "AdvanceSearch.SelectedApplicationType": "-1",
+            "AdvanceSearch.SelectedDevelopmentType": "-1",
+            "AdvanceSearch.SelectedApplicationStatus": "-1",
+        }
+        # Defaults for the form's UI radios/checkboxes — matches what a browser
+        # sends for the default page state (no checkboxes ticked, "Any status"
+        # implicit). The static HTML has none of these radios `checked` because
+        # they get selected via JS, so we have to inject them ourselves.
+        ui_defaults = [
+            ("SearchFor", "PlanningApplications"),
+            ("SortOptions", "SortedByMostRecent"),
+            ("StatusOptions", "ReceivedAnyTime"),
+            # AnyStatus appears twice in the form (checkbox+hidden, twice over)
+            ("AnyStatus", "true"),
+            ("AnyStatus", "false"),
+            ("AnyStatus", "true"),
+            ("AnyStatus", "false"),
+            ("Validated", "false"),
+            ("Decided", "false"),
+            ("AppealLodged", "false"),
+            ("AppealDecided", "false"),
+        ]
+        applied: set = set()
+        seen_ui_keys: set = set()
+        for k, v in self._base_form_pairs:
+            if k in overrides and k not in applied:
+                pairs.append((k, overrides[k]))
+                applied.add(k)
+            else:
+                pairs.append((k, v))
+                if k in {n for n, _ in ui_defaults}:
+                    seen_ui_keys.add(k)
+        # Inject UI defaults that the static form didn't provide
+        for k, v in ui_defaults:
+            if k not in seen_ui_keys and k not in applied:
+                pairs.append((k, v))
+        for k in self._ADVANCE_BLANKS:
+            if k not in applied:
+                pairs.append((k, ""))
+                applied.add(k)
+        for k, v in overrides.items():
+            if k not in applied:
+                pairs.append((k, v))
+                applied.add(k)
+        if "ManagementAreaPrompt" not in applied:
+            pairs.append(("ManagementAreaPrompt", "Management Area"))
+        if "Parish" not in applied:
+            pairs.append(("Parish", "false"))
+
+        body = urlencode(pairs)
+        try:
+            resp = await self._client.post(
+                self._base_url + SEARCH_RESULTS,
+                content=body,
+                headers={**self._ajax_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+            )
+        except httpx.HTTPError:
+            return []
+        if resp.status_code != 200:
+            return []
+
+        summaries = self._parse_search_results(resp.text)
+        if summaries:
+            summaries = await self._paginate_results_pairs(resp.text, pairs, summaries)
+        return summaries
+
+    async def _paginate_results_pairs(
+        self,
+        first_page_html: str,
+        form_pairs: List[tuple],
+        existing: List[ApplicationSummary],
+    ) -> List[ApplicationSummary]:
+        """Paginate Advanced Search results via SearchResultsForPagination.
+
+        Northgate Assure paginates through a separate AJAX endpoint that
+        wants `PagingParameters.PageSize`, `PagingParameters.CurrentPageIndex`
+        (1-indexed for the next page), and `PagingParameters.TotalRecords`
+        from the first response. We extract these from the first page HTML.
+        """
+        seen_uids = {s.uid for s in existing}
+        all_summaries = list(existing)
+
+        page_size, total_records = self._extract_paging_meta(first_page_html)
+        if page_size <= 0 or total_records <= page_size:
+            return all_summaries
+        total_pages = (total_records + page_size - 1) // page_size
+
+        for page_idx in range(2, min(total_pages + 1, self.MAX_PAGES + 1)):
+            paginated = [
+                (k, v) for k, v in form_pairs
+                if not k.startswith("PagingParameters.")
+                and k not in {"IsPaginationClicked"}
+            ]
+            paginated.append(("PagingParameters.PageSize", str(page_size)))
+            paginated.append(("PagingParameters.CurrentPageIndex", str(page_idx)))
+            paginated.append(("PagingParameters.TotalRecords", str(total_records)))
+            paginated.append(("IsPaginationClicked", "true"))
+
+            try:
+                resp = await self._client.post(
+                    self._base_url + PAGINATION_URL,
+                    content=urlencode(paginated),
+                    headers={**self._ajax_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                )
+                if resp.status_code != 200:
+                    break
+                new_summaries = self._parse_search_results(resp.text)
+                if not new_summaries:
+                    break
+                added = False
+                for s in new_summaries:
+                    if s.uid not in seen_uids:
+                        seen_uids.add(s.uid)
+                        all_summaries.append(s)
+                        added = True
+                if not added:
+                    break
+            except httpx.HTTPError:
+                break
+
+        return all_summaries
+
+    @staticmethod
+    def _extract_paging_meta(html: str) -> tuple:
+        """Return (page_size, total_records) from the first page's hidden inputs."""
+        soup = BeautifulSoup(html, "html.parser")
+        ps = soup.find("input", {"id": "PagingParameters_PageSize"})
+        tr = soup.find("input", {"id": "PagingParameters_TotalRecords"})
+        page_size = int(ps.get("value") or 0) if ps else 0
+        total_records = int(tr.get("value") or 0) if tr else 0
+        # Fallback: parse "N Results" string in body
+        if total_records == 0:
+            m = re.search(r"(\d+)\s+Results", html)
+            if m:
+                total_records = int(m.group(1))
+        return page_size or 20, total_records
 
     async def _search_monthly_list(
         self, date_from: date, date_to: date
