@@ -14,14 +14,17 @@ SWIFTLG_SEARCH_SELECTORS = {
 }
 
 SWIFTLG_SPAN_SELECTORS = {
-    "reference": "span:-soup-contains('Application Ref') + p",
-    "date_validated": "span:-soup-contains('Registration Date') + p",
-    "address": "span:-soup-contains('Main Location') + p",
-    "description": "span:-soup-contains('Full Description') + p",
+    "reference": "span:-soup-contains('Application Ref') + p, span:-soup-contains('Application Number') + p",
+    "date_validated": "span:-soup-contains('Registration Date') + p, span:-soup-contains('Valid Date') + p",
+    "address": "span:-soup-contains('Main Location') + p, span:-soup-contains('Site Address') + p",
+    "description": "span:-soup-contains('Full Description') + p, span:-soup-contains('Proposal') + p",
     "application_type": "span:-soup-contains('Application Type') + p",
     "date_received": "span:-soup-contains('Application Date') + p",
     "decision": "span:-soup-contains('Decision') + p",
     "case_officer": "span:-soup-contains('Case Officer') + p",
+    "ward": "span:-soup-contains('Ward') + p",
+    "status": "span:-soup-contains('Stage') + p",
+    "target_date": "span:-soup-contains('Target Date for Decision') + p",
 }
 
 SWIFTLG_LABEL_SELECTORS = {
@@ -126,16 +129,41 @@ class SwiftLGScraper(BaseScraper):
             post_url = self.config.base_url + "/WPHAPPCRITERIA"
         response = await self._client.post(post_url, data=form_data)
         html = response.text
-        applications = []
-        while True:
-            page_apps = self._parse_results(html)
-            applications.extend(page_apps)
-            next_el = self._parser.select_one(html, self._search_selectors["next_page"])
-            if next_el is None:
-                break
+
+        # SwiftLG result pages list every page number as `?StartIndex=N` —
+        # picking the first such link with `select_one` always points at
+        # page 2, so we walk pagination by enumerating `StartIndex` values
+        # in order and de-duplicating the visited URLs.
+        applications: list = []
+        seen_urls: set = set()
+        seen_uids: set = set()
+        max_pages = 100
+
+        from bs4 import BeautifulSoup
+        for _ in range(max_pages):
+            for app in self._parse_results(html):
+                if app.uid in seen_uids:
+                    continue
+                seen_uids.add(app.uid)
+                applications.append(app)
+
+            soup = BeautifulSoup(html, "lxml")
+            next_url = None
             base = self.config.base_url.rstrip("/") + "/"
-            next_url = urljoin(base, next_el.get("href", ""))
+            for link in soup.select(self._search_selectors["next_page"]):
+                href = link.get("href", "")
+                if not href:
+                    continue
+                candidate = urljoin(base, href)
+                if candidate in seen_urls:
+                    continue
+                next_url = candidate
+                break
+            if not next_url:
+                break
+            seen_urls.add(next_url)
             html = await self._client.get_html(next_url)
+
         return applications
 
     def _parse_results(self, html):
@@ -158,9 +186,11 @@ class SwiftLGScraper(BaseScraper):
             description=data.get("description") or "",
             url=application.url,
             application_type=data.get("application_type"),
-            status=data.get("decision"),
+            status=data.get("status") or data.get("decision"),
+            decision=data.get("decision"),
             date_received=self._parse_date(data.get("date_received")),
             date_validated=self._parse_date(data.get("date_validated")),
+            ward=data.get("ward"),
             case_officer=data.get("case_officer"),
             raw_data=raw,
         )
