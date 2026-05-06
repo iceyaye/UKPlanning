@@ -31,8 +31,12 @@ async def run_council_scrape(
 
     if council.last_successful_at:
         date_from = council.last_successful_at.date()
-        # Always look back at least MIN_LOOKBACK_DAYS to catch late-registered apps
-        earliest_allowed = date_to - timedelta(days=MIN_LOOKBACK_DAYS)
+        # Always look back at least MIN_LOOKBACK_DAYS to catch late-registered
+        # apps. When the caller explicitly asks for a longer window via
+        # `lookback_days` (e.g. dashboard "Test Scrape" with days=90), honour
+        # the larger of the two as the floor.
+        floor_days = max(MIN_LOOKBACK_DAYS, lookback_days)
+        earliest_allowed = date_to - timedelta(days=floor_days)
         if date_from > earliest_allowed:
             date_from = earliest_allowed
     else:
