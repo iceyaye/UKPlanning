@@ -581,21 +581,39 @@ class PlanningRegisterScraper(BaseScraper):
 
     @staticmethod
     def _extract_summary_tables(soup) -> dict:
-        """Extract label/value pairs from <table class="summaryTbl"> two-column rows.
+        """Walk every two-column `<tr><td>label</td><td>value</td></tr>` on the
+        page and return a label→value map.
 
-        NorthDevon's Aspire/CSW template renders detail data as `<table>` rows
-        of `<td>Label</td><td>Value</td>`. Each table is a section
-        (Summary / Important Dates / Further Information). Rows whose first
-        cell has `colspan=2` are section headers, not data.
+        Originally targeted at NorthDevon's `table.summaryTbl` markup, but
+        it makes no assumption about the table's class so it also picks up
+        any other planning_register variant that lays out details in
+        two-column rows (and ignores section-header rows that have
+        `colspan=2`). A label-blacklist excludes navigation rows like
+        `<td>Application Number</td><td>81542</td>` happening to appear in
+        a header navigation table.
         """
         result = {}
-        for table in soup.select("table.summaryTbl, table.summary-table"):
-            for tr in table.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) != 2:
-                    continue
-                label = tds[0].get_text(" ", strip=True).rstrip(":").strip()
-                value = tds[1].get_text(" ", strip=True)
-                if label and value and value != "N/A":
-                    result[label] = value
+        for tr in soup.find_all("tr"):
+            tds = tr.find_all("td", recursive=False) or tr.find_all("td")
+            if len(tds) != 2:
+                continue
+            # Section headers in summaryTbl have colspan=2 on a single td;
+            # navigation rows often have nested forms/links rather than text.
+            label = tds[0].get_text(" ", strip=True).rstrip(":").strip()
+            value = tds[1].get_text(" ", strip=True)
+            if not label or not value or value == "N/A":
+                continue
+            # Skip if the value is just another label (the same vertical-
+            # layout bug as Strategy 3): Location\nAddress\n10 Winston…
+            # would expose `<td>Address</td>` followed by another row whose
+            # first cell happens to start with the actual address.
+            if value.lower() in {
+                "address", "site address", "location address", "location",
+                "proposal", "description", "reference", "application number",
+            }:
+                continue
+            # First match wins — the summary tables typically appear early
+            # in the document, before any nav/footer that might also have
+            # two-column layouts.
+            result.setdefault(label, value)
         return result
