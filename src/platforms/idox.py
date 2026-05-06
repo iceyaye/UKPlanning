@@ -199,8 +199,10 @@ class IdoxScraper(BaseScraper):
             except httpx.HTTPStatusError as e:
                 # Site rate-limited us deep in pagination — return what we have
                 # rather than losing the whole search. The next scheduled run
-                # picks up where we left off via the per-app upsert.
-                if e.response.status_code in (429, 503):
+                # picks up where we left off via the per-app upsert. 403 is
+                # also a common bot-protection response after a few rapid
+                # paginated GETs (EastRiding hits this on page 5).
+                if e.response.status_code in (403, 429, 503):
                     logger.warning(
                         "%s: pagination stopped at %d apps due to %d on %s",
                         self.config.authority_code, len(applications),
